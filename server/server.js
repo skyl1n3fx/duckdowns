@@ -111,10 +111,23 @@ function cleanNick(raw) {
   return s;
 }
 
+// Detecta un túnel ngrok local (API en 127.0.0.1:4040) que apunte a este puerto.
+let ngrokUrl = '';
+async function pollNgrok() {
+  try {
+    const r = await fetch('http://127.0.0.1:4040/api/tunnels', { signal: AbortSignal.timeout(1500) });
+    const d = await r.json();
+    const t = (d.tunnels || []).find(t => /^https:\/\//.test(t.public_url || '') && String((t.config || {}).addr || '').endsWith(':' + PORT));
+    ngrokUrl = t ? t.public_url.replace(/\/+$/, '') + '/carrera.html' : '';
+  } catch { ngrokUrl = ''; }
+}
+pollNgrok(); setInterval(pollNgrok, 5000).unref();
+
 function shareUrls() {
   const out = [];
   const pub = (process.env.PUBLIC_URL || '').trim();
   if (/^https?:\/\/[^\s<>"'`]{1,200}$/i.test(pub)) out.push(pub);
+  if (/^https:\/\/[^\s<>"'`]{1,200}$/i.test(ngrokUrl)) out.push(ngrokUrl);
   for (const list of Object.values(os.networkInterfaces())) {
     for (const a of list || []) {
       if ((a.family === 'IPv4' || a.family === 4) && !a.internal) out.push(`http://${a.address}:${PORT}/carrera.html`);
