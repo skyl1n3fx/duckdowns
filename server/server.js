@@ -25,7 +25,9 @@ const C = {
   BOT_MAX: 14.2,          // crucero maximo de bots
   BOT_RUBBER: 0.12,       // bonus maximo por rubber-band
   BOT_AVG: 12.5,
-  GIANT_S: 8, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 1, UFO_PER_RACE: 1, JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
+  GIANT_S: 8, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 3, UFO_PER_RACE: 3,
+  UFO_COOLDOWN_S: Math.min(60, Math.max(0, Number(process.env.DUCK_UFO_CD ?? 15))),   // DUCK_UFO_CD solo para tests
+  JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
 };
 C.BOT_CAP = C.BOT_MAX * (1 + C.BOT_RUBBER) + 0.6;   // tope de bots incl. rubber-band
 const TOL_FINISH = 2;               // tolerancia en p para dar la meta
@@ -85,8 +87,15 @@ const server = http.createServer((req, res) => {
   let p;
   try { p = decodeURIComponent((req.url || '/').split('?')[0]); } catch { p = ''; }
   if (p === '/') p = '/carrera.html';
-  const type = STATIC[p];                       // lista blanca: sin traversal posible
-  const file = type && path.join(ROOT, path.basename(p));
+  // Música local opcional: carpeta musica/ (no versionada). Solo se sirven .mp3 listados en ella.
+  const tracks = () => { try { return fs.readdirSync(path.join(ROOT, 'musica')).filter(n => /^[^/\\]+\.mp3$/i.test(n)); } catch { return []; } };
+  if (p === '/musica.json') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    return res.end(JSON.stringify(tracks()));
+  }
+  let type = STATIC[p];                         // lista blanca: sin traversal posible
+  let file = type && path.join(ROOT, path.basename(p));
+  if (!type && p.startsWith('/musica/') && tracks().includes(p.slice(8))) { type = 'audio/mpeg'; file = path.join(ROOT, 'musica', p.slice(8)); }
   if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) {
     res.writeHead(type ? 405 : 404, { 'content-type': 'text/plain' });
     return res.end('no');
@@ -229,6 +238,11 @@ function sanitizeData(v, depth = 0) {
   return undefined;
 }
 
+// Easter egg: quien se llame "ale" tiene KIRK infinitos (usesLeft = 999 = infinito para el cliente).
+const kirkInf = p => String(p.nick || '').trim().toLowerCase() === 'ale';
+const kirkLeft = p => kirkInf(p) ? 999 : Math.max(0, C.UFO_PER_RACE - (p.ufoUsed || 0));
+function kirkState(p) { return { t: 'kirkState', usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext || 0, serverNow: now() }; }
+
 // ---------- carrera ----------
 function maybeStart() {
   if (phase !== 'lobby' || players.size === 0) return;
@@ -237,7 +251,7 @@ function maybeStart() {
   const lanes = [0, 1, 2, 3, 4, 5, 6, 7];
   for (let i = lanes.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [lanes[i], lanes[j]] = [lanes[j], lanes[i]]; }
   const slots = [];
-  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; p.ufoUsed = 0; });
+  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; p.ufoUsed = 0; p.ufoNext = 0; });
   const spare = COLORS.filter(c => !list.some(q => q.color === c));
   for (let i = list.length; i < MAX_PLAYERS; i++) slots[lanes[i]] = { slot: lanes[i], id: null, nick: `Bot ${lanes[i] + 1}`, kind: 'bot', color: spare[i - list.length] };
   const t0 = now();
@@ -253,6 +267,7 @@ function maybeStart() {
   phase = 'countdown';
   broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps });
   broadcast(lobbyMsg());
+  for (const p of list) send(p.ws, kirkState(p));
   setTimeout(() => { if (phase === 'countdown') phase = 'race'; }, cd);
 }
 
@@ -379,12 +394,15 @@ function onMessage(p, m) {
     case 'kirk': {      // codigo secreto: OVNI (impulso al autor + laser que aturde a los demas), 1 vez por carrera
       if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
       const tn = now();
-      if ((p.ufoUsed || 0) >= C.UFO_PER_RACE || tn < (p.mv.stunUntil || 0)) return;
-      p.ufoUsed = (p.ufoUsed || 0) + 1;
+      if ((!kirkInf(p) && (p.ufoUsed || 0) >= C.UFO_PER_RACE) || tn < (p.ufoNext || 0) || tn < (p.mv.stunUntil || 0)) {   // sin usos, en cooldown o aturdido
+        const k = kirkState(p); return send(p.ws, { t: 'kirkNo', usesLeft: k.usesLeft, cooldownUntil: k.cooldownUntil, serverNow: k.serverNow });
+      }
+      p.ufoUsed = (p.ufoUsed || 0) + 1; p.ufoNext = tn + C.UFO_COOLDOWN_S * 1000;
       p.mv.ufoUntil = tn + C.UFO_BOOST_S * 1000;
       p.mv.envBonus = (p.mv.envBonus || 0) + (C.UFO_BOOST - 1) * C.UFO_BOOST_S;
-      broadcast({ t: 'ufo', from: p.slot, id: p.id, serverNow: tn, boostUntil: p.mv.ufoUntil, stunUntil: tn + C.UFO_STUN_S * 1000 });
-      for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.UFO_STUN_S * 1000);   // respeta inmunidad y aire
+      broadcast({ t: 'ufo', from: p.slot, id: p.id, serverNow: tn, boostUntil: p.mv.ufoUntil, stunUntil: tn + C.UFO_STUN_S * 1000, usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext });
+      for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.UFO_STUN_S * 1000);   // respeta inmunidad, aire y gigante
+      send(p.ws, kirkState(p));
       return;
     }
     case 'pickup': onPickup(p, m); return;

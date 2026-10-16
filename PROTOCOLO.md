@@ -68,11 +68,13 @@ S->C:
 - El cliente NO debe aplicar el stun solo: espera `stun` del servidor (puede cliente-predecir el misil con `missile`).
 
 ## Codigo secreto KIRK (OVNI)
-- C->S `kirk{}`: el cliente lo manda al completar la secuencia K-I-R-K. Solo vale en fase `race` ya iniciada (no en lobby ni cuenta atras), si el pato esta en carrera, no ha llegado a meta y **no esta aturdido**. Regla: **1 vez por jugador por carrera** (`UFO_PER_RACE`); lo demas se descarta en silencio. Los bots no usan KIRK. No hay campo de destino: el autor es siempre quien envia.
-- S->C `ufo{from:<slot del activador>, id, serverNow, boostUntil, stunUntil}` a todos: efectos alienigenas para todo el servidor.
+- C->S `kirk{}`: el cliente lo manda al completar la secuencia K-I-R-K. Solo vale en fase `race` ya iniciada (no en lobby ni cuenta atras), si el pato esta en carrera y no ha llegado a meta. No hay campo de destino: el autor es siempre quien envia. Los bots no usan KIRK.
+- Reglas: **3 usos por jugador por carrera** (`UFO_PER_RACE`) con **cooldown de 15 s** entre usos (`UFO_COOLDOWN_S`); no se puede usar aturdido. Un `kirk` sin usos, en cooldown o aturdido se rechaza y el servidor responde `kirkNo{usesLeft,cooldownUntil,serverNow}` (el HUD toma estos valores como autoridad). Fuera de carrera/cuenta atras se descarta en silencio.
+- S->C `kirkState{usesLeft,cooldownUntil,serverNow}` al jugador al iniciar la carrera (3 usos, cooldownUntil=0) y tras cada uso. `cooldownUntil` en ms de reloj de servidor.
+- S->C `ufo{from:<slot del activador>, id, serverNow, boostUntil, stunUntil, usesLeft, cooldownUntil}` a todos (efectos alienigenas para todo el servidor; `usesLeft`/`cooldownUntil` son del autor).
 - Impulso: x1.4 (`UFO_BOOST`) durante 1.5 s (`UFO_BOOST_S`) para el activador; el servidor amplia tope de velocidad y envolvente (+0.6 s equivalentes), asi que no se recorta. Pasado `boostUntil` vuelve al tope normal.
-- Laser: `stun` de 1 s (`UFO_STUN_S`) a TODOS los demas patos (jugadores y bots), uno `stun{slot,id,until,serverNow}` por afectado; el autor no se aturde; respeta inmunidad de 1 s post-stun y los del aire (rampa) no se ven afectados.
-- `welcome.consts` suma `UFO_BOOST=1.4, UFO_BOOST_S=1.5, UFO_STUN_S=1, UFO_PER_RACE=1`.
+- Laser: `stun` de 3 s (`UFO_STUN_S`) a TODOS los demas patos (jugadores y bots), uno `stun{slot,id,until,serverNow}` por afectado; el autor no se aturde; respeta inmunidad de 1 s post-stun, a los del aire (rampa) y a los gigantes (no se ven afectados).
+- `welcome.consts`: `UFO_BOOST=1.4, UFO_BOOST_S=1.5, UFO_STUN_S=3, UFO_PER_RACE=3, UFO_COOLDOWN_S=15`.
 
 ## Gigante (3er power-up)
 - Consts en `welcome.consts`: `GIANT_S=8, GIANT_SCALE=3, GIANT_BUMP_R=4, GIANT_BUMP_STUN_S=2`.
