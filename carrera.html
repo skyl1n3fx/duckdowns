@@ -46,6 +46,13 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#7fd6ff;fon
 #plist .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #plist .st{font-size:.8em;padding:2px 12px;border-radius:99px;background:#6b7280}
 #plist li.ok .st{background:#16a34a}
+#slist{width:100%;display:flex;flex-direction:column;gap:5px;padding:8px 10px;border-radius:18px;background:rgba(0,0,0,.2);max-height:26vh;overflow:auto}
+#slist .tt{font-weight:800;font-size:clamp(13px,2vw,17px)}
+#slist button{display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;border:0;border-radius:12px;background:rgba(255,255,255,.25);color:#fff;font:700 clamp(12px,1.8vw,15px) inherit;cursor:pointer;text-align:left}
+#slist button .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#slist button .c{min-width:26px;text-align:center;padding:1px 8px;border-radius:99px;background:#6b7280}
+#slist button.mine{background:rgba(255,225,74,.5);box-shadow:inset 0 0 0 3px #ffe14a}
+#slist button.mine .c{background:#f59e0b}
 #sw{display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
 #sw button{pointer-events:auto;width:clamp(26px,4vw,34px);height:clamp(26px,4vw,34px);border-radius:50%;border:4px solid #fff;cursor:pointer;padding:0;box-shadow:0 4px 0 rgba(0,0,0,.25);transition:transform .1s}
 #sw button:hover:not(:disabled){transform:scale(1.15)}
@@ -92,6 +99,7 @@ im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})()
 <div id="sw"></div>
 <input id="nick" maxlength="14" placeholder="Tu nombre" autocomplete="off" spellcheck="false">
 <ul id="plist" class="hide"></ul>
+<div id="slist" class="hide"></div>
 <div id="share" class="hide"><div id="shareHint"></div><div class="shr"><input id="shareTxt" readonly aria-label="Enlace del servidor"><button id="copy" class="mini">Copiar</button></div></div>
 <div id="need"></div>
 <div class="btn" id="go">Click para empezar</div>
@@ -760,17 +768,29 @@ function musPick(){
   while(n===mus.last&&mus.list.length>1&&g++<8)n=mus.list[(Math.random()*mus.list.length)|0];
   mus.last=n;return '/musica/'+encodeURIComponent(n);
 }
-function musPlay(url){
+function musPlay(url,off){
   const old=mus.a[mus.cur];mus.cur=1-mus.cur;const el=mus.a[mus.cur];
   el.src=url;el.currentTime=0;el.volume=0;el.muted=!!audio.muted;mus.vol[mus.cur]=0;mus.fade=0.6;
+  if(off>0)el.addEventListener('loadedmetadata',()=>{if(el.duration>0)el.currentTime=off%el.duration;},{once:true});
   const pr=el.play();if(pr&&pr.catch)pr.catch(()=>{});
   void old;
 }
 function musMode(mode,force){
   if(mode===mus.mode&&!force&&mus.started)return;
   mus.mode=mode;mus.target=mode==='race'?0.75:0.4;mus.fb=false;
-  if(mus.started)musPlay(musPick());
+  if(mode==='lobby'){musStop();return;}            // lobby sin música
+  if(mus.started&&!mus.srv)musPlay(musPick());   // con servidor, la canción la decide él (global)
 }
+// Canción global elegida por el servidor: {track, mode, at(ms servidor)}; todos escuchan la misma y en el mismo punto.
+function musStop(){mus.want=null;for(const el of mus.a){el.pause();el.volume=0;}}
+function musServer(m){
+  if(m.track===null){mus.srv=true;mus.mode='lobby';musStop();return;}   // lobby sin música
+  if(typeof m.track!=='string'||!/\.mp3$/i.test(m.track))return;
+  mus.srv=true;mus.mode=m.mode==='race'?'race':'lobby';mus.target=mus.mode==='race'?0.75:0.4;mus.fb=false;
+  mus.want={url:'/musica/'+encodeURIComponent(m.track),at:+m.at||0};
+  if(mus.started)musPlayWant();
+}
+function musPlayWant(){const w=mus.want;mus.last=w.url;musPlay(w.url,(Date.now()+net.offset-w.at)/1000);}
 function musTick(dt){ // fundido cruzado
   if(!mus.started)return;
   const n=mus.a[mus.cur],o=mus.a[1-mus.cur],k=mus.fade>0?dt/0.6:1;
@@ -780,7 +800,7 @@ function musTick(dt){ // fundido cruzado
   if(o.volume>0){o.volume=Math.max(0,o.volume-0.75*k);if(o.volume===0)o.pause();}
   n.muted=o.muted=!!audio.muted;
 }
-function musStart(){if(mus.started)return;mus.started=true;musPlay(musPick());}
+function musStart(){if(mus.started)return;mus.started=true;if(mus.want)musPlayWant();else if(mus.mode==='race')musPlay(musPick());}
 addEventListener('pointerdown',musStart,{once:true});addEventListener('keydown',musStart,{once:true});
 function startRace(spec,startAt){
   musMode('race');
@@ -879,10 +899,24 @@ function takenByOthers(c){for(let i=0;i<net.players.length;i++){const p=net.play
 const swBtns=[];
 (function(){const box=$('sw');PALETTE.forEach(c=>{const b=document.createElement('button');b.style.background=hex(c);b.setAttribute('aria-label','Color '+hex(c));
   b.addEventListener('click',()=>{net.color=c;store('duck.color',String(c));if(net.on)send({t:'color',color:c});else resetRace();renderLobby();});box.appendChild(b);swBtns.push(b);});})();
+function renderSongs(){
+  const box=$('slist'),songs=net.on&&Array.isArray(net.songs)?net.songs:[];
+  box.classList.toggle('hide',!songs.length);if(!songs.length)return;
+  const tally={};let mine=null;
+  for(const p of net.players||[]){if(p.vote)tally[p.vote]=(tally[p.vote]||0)+1;if(p.id===net.id)mine=p.vote||null;}
+  box.textContent='';const tt=document.createElement('div');tt.className='tt';tt.textContent='\u{1F3B5} Vota la canción de la carrera';box.appendChild(tt);
+  for(const sname of songs){
+    const b=document.createElement('button');if(sname===mine)b.className='mine';
+    const n=document.createElement('span');n.className='n';n.textContent=sname.replace(/\.mp3$/i,'');
+    const c=document.createElement('span');c.className='c';c.textContent=tally[sname]||0;
+    b.append(n,c);b.addEventListener('click',()=>send({t:'vote',track:sname===mine?null:sname}));box.appendChild(b);
+  }
+}
 function renderLobby(){
   for(let i=0;i<PALETTE.length;i++){const c=PALETTE[i],b=swBtns[i];b.classList.toggle('sel',c===net.color);b.disabled=net.on&&c!==net.color&&takenByOthers(c);}
   $('start').classList.toggle('live',net.on);renderShare();syncLobbyDucks();
   const ul=$('plist'),go=$('go'),need=$('need');
+  renderSongs();
   if(!net.on){$('share').classList.add('hide');ul.classList.add('hide');need.textContent='';go.textContent='Click para empezar';go.classList.remove('on');return;}
   ul.classList.remove('hide');ul.textContent='';
   let wait=0;
@@ -1008,12 +1042,13 @@ function onMsg(m){
     case 'welcome':
       applyConsts(m.consts);
       net.id=m.id;net.hostId=m.hostId;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.offset=m.serverNow-Date.now();net.phase=m.phase;
+      if(m.music)musServer(m.music);
       if(Array.isArray(m.palette)&&m.palette.length===PALETTE.length)for(let i=0;i<PALETTE.length;i++)PALETTE[i]=m.palette[i];
       for(let i=0;i<PALETTE.length;i++)swBtns[i].style.background=hex(PALETTE[i]);
       break;
     case 'lobby':
       if(game.online&&m.hostId!==net.hostId)for(const r of racers)if(r.kind==='bot'){r.tp=r.p;r.tpx=r.x;r.tvp=r.vp;r.tvx=r.vx;r.tAge=performance.now();}
-      net.players=m.players;net.hostId=m.hostId;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.phase=m.phase;
+      net.players=m.players;net.hostId=m.hostId;if(Array.isArray(m.songs))net.songs=m.songs;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.phase=m.phase;
       for(const p of m.players)if(p.id===net.id){net.ready=!!p.ready;if(p.color!==undefined&&p.color!==net.color){net.color=p.color;store('duck.color',String(p.color));}}
       if(game.state==='finale'&&game.fin&&game.fin.phase==='podium'&&m.phase==='lobby')goLobby('');
       else if((game.state==='race'||game.state==='countdown')&&m.phase==='lobby')goLobby('La carrera terminó');
@@ -1022,6 +1057,7 @@ function onMsg(m){
       else if(game.state==='menu')setNet('');
       break;
     case 'start':onStart(m);break;
+    case 'music':musServer(m);break;
     case 'snap':
       if(!game.online)break;
       for(const p of m.players){const r=racerById(p.id);if(r)feed(r,p);}

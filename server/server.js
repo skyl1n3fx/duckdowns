@@ -153,6 +153,25 @@ let phase = 'lobby';         // lobby | countdown | race | results
 let race = null;             // {seed,startAt,slots,finishes:[],bots:Map,timer}
 let resetTimer = null;
 let hostId = null;
+// Canción global: el servidor elige una al azar (distinta de la anterior) para el lobby y otra para cada carrera.
+let song = null;             // {track, mode, at}; en lobby track = null (sin música)
+const votes = new Map();     // id jugador -> canción votada para la próxima carrera
+function songList() {
+  try { return fs.readdirSync(path.join(ROOT, 'musica')).filter(n => /^[^/\\]+\.mp3$/i.test(n)).sort(); } catch { return []; }
+}
+function pickSong(mode) {
+  const list = songList();
+  let track = null;
+  if (mode === 'race' && list.length) {
+    const tally = new Map();
+    for (const t of votes.values()) if (list.includes(t)) tally.set(t, (tally.get(t) || 0) + 1);
+    const top = Math.max(0, ...tally.values());
+    const pool = top ? [...tally].filter(([, c]) => c === top).map(([t]) => t) : list;   // más votada; empate o sin votos = azar
+    track = pool[Math.floor(Math.random() * pool.length)];
+  }
+  song = { track, mode, at: now() };
+  broadcast({ t: 'music', ...song, serverNow: now() });
+}
 let hostClips = 0;          // recortes acumulados del host actual en la carrera
 const hostBanned = new Set(); // ids a los que se les quito el rol de host
 
@@ -177,7 +196,7 @@ function pickHost() {
   hostId = ids.find(i => !hostBanned.has(i)) ?? ids[0] ?? null;
 }
 function lobbyMsg() {
-  return { t: 'lobby', phase, hostId, shareUrls: shareUrls(), players: [...players.values()].map(p => ({ id: p.id, nick: p.nick, ready: p.ready, host: p.id === hostId, color: p.color })) };
+  return { t: 'lobby', phase, hostId, shareUrls: shareUrls(), songs: songList(), players: [...players.values()].map(p => ({ id: p.id, nick: p.nick, ready: p.ready, host: p.id === hostId, color: p.color, vote: votes.get(p.id) || null })) };
 }
 const sendLobby = () => broadcast(lobbyMsg());
 
@@ -267,6 +286,7 @@ function maybeStart() {
   phase = 'countdown';
   broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps });
   broadcast(lobbyMsg());
+  pickSong('race');
   for (const p of list) send(p.ws, kirkState(p));
   setTimeout(() => { if (phase === 'countdown') phase = 'race'; }, cd);
 }
@@ -325,6 +345,8 @@ function backToLobby() {
   race = null; phase = 'lobby'; hostBanned.clear(); hostClips = 0;
   for (const p of players.values()) { p.ready = false; p.inRace = false; p.dnf = false; p.slot = null; }
   pickHost();
+  votes.clear();
+  pickSong('lobby');
   sendLobby();
 }
 
@@ -343,7 +365,7 @@ function onMessage(p, m) {
       p.nick = uniqueNick(m.nick, p.id);
       p.color = freeColor(m.color, p.id);
       pickHost();
-      send(p.ws, { t: 'welcome', id: p.id, nick: p.nick, hostId, serverNow: now(), phase, seed: race ? race.seed : null, maxPlayers: MAX_PLAYERS, color: p.color, palette: COLORS, shareUrls: shareUrls(), consts: C });
+      send(p.ws, { t: 'welcome', id: p.id, nick: p.nick, hostId, serverNow: now(), phase, seed: race ? race.seed : null, maxPlayers: MAX_PLAYERS, color: p.color, palette: COLORS, shareUrls: shareUrls(), consts: C, music: song });
       sendLobby();
       return;
     case 'ping': return send(p.ws, { t: 'pong', serverNow: now() });
@@ -356,6 +378,12 @@ function onMessage(p, m) {
     case 'color':
       if (phase !== 'lobby' || !lobbyOk(p)) return;
       p.color = freeColor(m.color, p.id); sendLobby(); return;
+    case 'vote':
+      if (phase !== 'lobby' || !lobbyOk(p)) return;
+      if (m.track === null) votes.delete(p.id);
+      else if (typeof m.track === 'string' && songList().includes(m.track)) votes.set(p.id, m.track);
+      else return;
+      sendLobby(); return;
     case 'ready':
       if (phase !== 'lobby' || typeof m.ready !== 'boolean' || !lobbyOk(p)) return;
       p.ready = m.ready; sendLobby(); maybeStart(); return;
@@ -597,9 +625,9 @@ wss.on('connection', (ws) => {
     if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.t !== 'string') return;
     try { onMessage(p, m); } catch (e) { console.error('msg error', e.message); }
   });
-  ws.on('close', () => { clearTimeout(hb); onLeave(p); });
+  ws.on('close', () => { clearTimeout(hb); votes.delete(p.id); onLeave(p); });
   ws.on('error', () => {});
 });
 
-server.listen(PORT, () => console.log(`duckdowns escuchando en :${PORT}`));
+server.listen(PORT, () => { console.log(`duckdowns escuchando en :${PORT}`); pickSong('lobby'); });
 process.on('SIGTERM', () => process.exit(0));
