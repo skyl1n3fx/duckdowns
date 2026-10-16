@@ -1110,7 +1110,7 @@ const duckApi={THREE,scene,camera,audio,consts:CFG,racers,fx,hudRoot:document.bo
 const MODS=[window.DuckRamps,window.DuckPowerups,window.DuckUfo]; // orden: rampas -> power-ups
 function modCall(fn,a,b){for(let i=0;i<MODS.length;i++){const m=MODS[i];if(m&&typeof m[fn]==='function'){try{m[fn](a,b);}catch(e){console.error('mod',fn,e);}}}}
 function raceEnded(){fx.camUp=0;fx.camLock=false;fx.shakeX=fx.shakeY=0;modCall('onRaceEnd');}
-const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1,kirkNo:1,kirkState:1};
+const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1,kirkNo:1,kirkState:1,trapAdd:1,trapGone:1,donut:1,cangri:1,cangriState:1,cangriNo:1};
 
 /* ===== BUCLE PRINCIPAL ===== */
 const camPos=new THREE.Vector3(0,6,12),camLook=new THREE.Vector3(),goalPos=new THREE.Vector3(),goalLook=new THREE.Vector3();

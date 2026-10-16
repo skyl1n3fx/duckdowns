@@ -3,7 +3,8 @@
 (function () {
 'use strict';
 const BOX_DP = 2.5, BOX_DX = 2, STUN_MS = 2000, IMMUNE_MS = 1000, RESPAWN_MS = 6000, ACT_GAP = 150;
-const ITEMS = ['bazooka', 'megafono', 'gigante'];
+const ITEMS = ['bazooka', 'megafono', 'gigante', 'dona'];
+const TRAP_W = 6;
 const GIANT_MS = 8000, GIANT_SCALE = 3, BUMP_GAP = 2500;
 let api = null, THREE = null, scene = null, audio = null, racing = false, startAt = 0;
 let boxes = [], boxRoot = null, hud = null, hudIcon = null, stunTxt = null, poolsReady = false;
@@ -36,6 +37,8 @@ const snd = {
   shrink() { if (!this.ok()) return; [3, 2, 1, 0].forEach((k, i) => audio._tone(180 * Math.pow(1.26, k), [[0, 1.1], [1, 0.8]], 0.22, 0.4, { delay: i * 0.09, type: 'triangle' })); audio.squeak(0.8, 'release', 1.3); },
   stomp(v) { if (!this.ok()) return; audio.thud(1.6 * v); audio._air(0.3, 0.35 * v, 500); },
   ping() { if (!this.ok()) return; audio._tone(2400, [[0, 1], [1, 0.97]], 0.45, 0.4, { type: 'sine', fm: 0, fmd: 0 }); audio._tone(3700, [[0, 1], [1, 0.97]], 0.3, 0.2, { type: 'sine', delay: 0.02, fm: 0, fmd: 0 }); },
+  plop() { if (!this.ok()) return; audio._tone(420, [[0, 0.5], [0.4, 1.6], [1, 0.8]], 0.18, 0.4, { type: 'sine', fm: 0, fmd: 0 }); audio._air(0.08, 0.2, 800); },
+  splat() { if (!this.ok()) return; audio.thud(1.2); audio._air(0.35, 0.45, 600); audio._tone(300, [[0, 1.6], [0.5, 0.7], [1, 0.4]], 0.3, 0.45, { type: 'sawtooth', fm: 40, fmd: 80 }); audio.squeak(0.9, 'squeeze', 0.9); },
   miss() { if (!this.ok()) return; audio.splash(0.5); },
 };
 
@@ -60,10 +63,18 @@ function buildShared() {
   G.ink = M(0x1b1230, { side: T.BackSide });
   const gl = c => { const cv = document.createElement('canvas'); cv.width = cv.height = 64; const x = cv.getContext('2d'), gr = x.createRadialGradient(32, 32, 2, 32, 32, 31);
     gr.addColorStop(0, c + 'cc'); gr.addColorStop(1, c + '00'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return new T.SpriteMaterial({ map: new T.CanvasTexture(cv), transparent: true, depthWrite: false }); };
-  G.glowMs = [gl('#ff6a9a'), gl('#ffd84a'), gl('#ffae2e')]; G.glowM = G.glowMs[0];
+  G.glowMs = [gl('#ff6a9a'), gl('#ffd84a'), gl('#ffae2e'), gl('#ff8ac8')]; G.glowM = G.glowMs[0];
   G.dB = new T.SphereGeometry(0.36, 14, 10); G.dB.scale(1, 0.8, 1.15);
   G.dH = new T.SphereGeometry(0.2, 12, 9); G.dK = new T.SphereGeometry(0.1, 8, 6); G.dK.scale(1, 0.6, 1.4);
   G.arrowG = new T.ConeGeometry(0.13, 0.34, 8);
+  G.dough = new T.TorusGeometry(0.46, 0.2, 10, 22); G.dough.rotateX(Math.PI / 2);
+  G.icing = new T.TorusGeometry(0.46, 0.2, 10, 22); G.icing.scale(1.04, 0.55, 1.04); G.icing.rotateX(Math.PI / 2);
+  G.spr = new T.BoxGeometry(0.1, 0.03, 0.03);
+  G.mDough = new T.MeshStandardMaterial({ color: 0xe6a458, roughness: 0.6 });
+  G.mIcing = new T.MeshStandardMaterial({ color: 0xff7eb6, roughness: 0.25 });
+  G.mSpr = [0xffffff, 0xffe14a, 0x4dd8ff, 0x7dff7a, 0xb57bff].map(c => new T.MeshBasicMaterial({ color: c }));
+  G.stainW = M(0xfff7fb, {}); G.stainP = M(0xff9ccb, {});
+  G.trapRing = new T.RingGeometry(0.8, 1, 36); G.trapRing.rotateX(-Math.PI / 2);
   G.pingM = (() => { const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128; const c = cv.getContext('2d');
     c.font = '900 84px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineWidth = 14; c.lineJoin = 'round';
     c.strokeStyle = '#1b3a5a'; c.strokeText('¡PING!', 128, 66); c.fillStyle = '#bfefff'; c.fillText('¡PING!', 128, 66);
@@ -140,6 +151,11 @@ function iconGroup(kind) {
     outlined(G.noseG, G.mega, g, 0, 0, -0.72);
     const gr = outlined(G.megH, G.metal, g, 0, -0.17, 0.15); gr.rotation.x = 0;
     g.scale.setScalar(1.5);
+  } else if (kind === 'dona') {
+    g.rotation.x = 0.5;
+    outlined(G.dough, G.mDough, g, 0, 0, 0); const ic = new THREE.Mesh(G.icing, G.mIcing); ic.position.y = 0.07; g.add(ic);
+    for (let i = 0; i < 9; i++) { const sp = new THREE.Mesh(G.spr, G.mSpr[i % 5]), a = i * 0.7; sp.position.set(Math.cos(a) * 0.46, 0.2, Math.sin(a) * 0.46); sp.rotation.y = a * 2; g.add(sp); }
+    g.scale.setScalar(2.2);
   } else if (kind === 'gigante') {
     outlined(G.dB, G.duckY, g, 0, -0.05, 0); outlined(G.dH, G.duckY, g, 0, 0.3, -0.2); outlined(G.dK, G.duckO, g, 0, 0.26, -0.4);
     const rots = [[0, 0], [0, Math.PI], [-Math.PI / 2, 0], [Math.PI / 2, 0], [0, 0, Math.PI / 2], [0, 0, -Math.PI / 2]];
@@ -154,14 +170,14 @@ function iconGroup(kind) {
   g.visible = false;
   return g;
 }
-function setKind(o, k) { o.kind = k; o.baz.visible = k === 'bazooka'; o.meg.visible = k === 'megafono'; o.gig.visible = k === 'gigante'; o.glow.material = G.glowMs[k === 'bazooka' ? 0 : k === 'megafono' ? 1 : 2]; }
+function setKind(o, k) { o.kind = k; o.baz.visible = k === 'bazooka'; o.meg.visible = k === 'megafono'; o.gig.visible = k === 'gigante'; o.don.visible = k === 'dona'; o.glow.material = G.glowMs[Math.max(0, ITEMS.indexOf(k))]; }
 
 /* ---------- cajas: burbuja de jabon con el icono del power-up ---------- */
 function makeBox(b, idx) {
   const T = THREE, g = new T.Group(), inner = new T.Group();
   const bub = new T.Mesh(G.sph, G.bubbleMats[idx % 3]); bub.scale.setScalar(0.95); g.add(bub);
-  const baz = iconGroup('bazooka'), meg = iconGroup('megafono'), gig = iconGroup('gigante');
-  inner.add(baz); inner.add(meg); inner.add(gig);
+  const baz = iconGroup('bazooka'), meg = iconGroup('megafono'), gig = iconGroup('gigante'), don = iconGroup('dona');
+  inner.add(baz); inner.add(meg); inner.add(gig); inner.add(don);
   const glow = new T.Sprite(G.glowM); glow.scale.set(2.3, 2.3, 1); glow.position.y = 0; g.add(glow);
   g.add(inner);
   for (let i = 0; i < 3; i++) { // destellos de la burbuja
@@ -170,8 +186,8 @@ function makeBox(b, idx) {
   }
   const base = new T.Mesh(G.ring, G.base); base.position.y = -1.0; base.scale.setScalar(0.9); g.add(base);
   g.visible = false; boxRoot.add(g);
-  const o = { id: b.id, p: b.p, x: b.x, active: true, g, inner, bub, base, baz, meg, gig, glow, kind: null, ph: idx * 1.7, sc: 1, back: 0, pos: new T.Vector3() };
-  setKind(o, b.kind || ITEMS[b.id % 3]);
+  const o = { id: b.id, p: b.p, x: b.x, active: true, g, inner, bub, base, baz, meg, gig, don, glow, kind: null, ph: idx * 1.7, sc: 1, back: 0, pos: new T.Vector3() };
+  setKind(o, b.kind || ITEMS[b.id % ITEMS.length]);
   return o;
 }
 function setBoxes(list) {
@@ -241,6 +257,7 @@ function puOf(r) {
 function getItemIcon(kind) {
   if (kind === 'bazooka') return '<svg viewBox="0 0 64 64" width="52" height="52"><rect x="6" y="26" width="42" height="12" rx="6" fill="#ff3d71" stroke="#1b1230" stroke-width="3"/><rect x="44" y="23" width="12" height="18" rx="4" fill="#3a3f4b"/><rect x="14" y="38" width="8" height="12" rx="3" fill="#3a3f4b"/><circle cx="58" cy="32" r="3" fill="#ffd23a"/></svg>';
   if (kind === 'megafono') return '<svg viewBox="0 0 64 64" width="52" height="52"><path d="M10 26h10l26-14v40L20 38H10z" fill="#ffd200" stroke="#1b1230" stroke-width="3"/><rect x="20" y="38" width="8" height="14" rx="3" fill="#3a3f4b"/><path d="M52 24q6 8 0 16M56 18q10 14 0 28" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/></svg>';
+  if (kind === 'dona') return '<svg viewBox="0 0 64 64" width="52" height="52"><circle cx="32" cy="32" r="22" fill="#e6a458" stroke="#1b1230" stroke-width="3"/><path d="M32 13c10 0 19 8 19 19s-9 19-19 19-19-8-19-19 9-19 19-19z" fill="#ff7eb6"/><circle cx="32" cy="32" r="7" fill="#9fdcff" stroke="#1b1230" stroke-width="3"/><path d="M20 24l4 2M42 22l-3 3M46 36l-4-1M24 44l3-3M36 46l1-4" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M28 20l3 1M44 30l-3 1M30 42l2-2" stroke="#ffe14a" stroke-width="3" stroke-linecap="round"/></svg>';
   if (kind === 'gigante') return '<svg viewBox="0 0 64 64" width="52" height="52"><ellipse cx="30" cy="40" rx="17" ry="13" fill="#ffd23a" stroke="#1b1230" stroke-width="3"/><circle cx="38" cy="22" r="10" fill="#ffd23a" stroke="#1b1230" stroke-width="3"/><ellipse cx="49" cy="25" rx="6" ry="3.5" fill="#ff6a00" stroke="#1b1230" stroke-width="2"/><path d="M8 8l8 2-6 6zM56 8l-8 2 6 6zM8 58l6-8 2 8zM56 58l-6-8-2 8z" fill="#ff3d71" stroke="#1b1230" stroke-width="2" stroke-linejoin="round"/></svg>';
   return '';
 }
@@ -394,6 +411,147 @@ function giantBumps(r, pu, n) {
   }
 }
 
+/* ---------- dona: trampa flotante, glaseado y manchas ---------- */
+const traps = [], trapPool = [];
+function makeTrapMesh() {
+  const T = THREE, g = new T.Group(), sp = new T.Group();
+  const d = new T.Mesh(G.dough, G.mDough); d.scale.setScalar(4); g.add(d);
+  const o = new T.Mesh(G.dough, G.ink); o.scale.setScalar(4 * 1.07); g.add(o);
+  const ic = new T.Mesh(G.icing, G.mIcing); ic.scale.setScalar(4); ic.position.y = 0.3; g.add(ic);
+  for (let i = 0; i < 22; i++) { const m = new T.Mesh(G.spr, G.mSpr[i % 5]), a = i * 0.9 + (i % 3) * 0.2, rr = 4 * 0.46 + ((i % 2) - 0.5) * 0.45; m.position.set(Math.cos(a) * rr, 0.95, Math.sin(a) * rr); m.rotation.y = a * 3; m.scale.setScalar(3.4); sp.add(m); }
+  g.add(sp);
+  const rg = new T.Mesh(G.trapRing, new T.MeshBasicMaterial({ color: 0xffb3d9, transparent: true, opacity: 0.5, depthWrite: false, side: T.DoubleSide })); rg.scale.setScalar(4.5); rg.position.y = -0.3; g.add(rg);
+  g.visible = false; scene.add(g);
+  return { g, rg, on: false, id: -1, p: 0, x: 0, w: TRAP_W, ph: 0, born: 0, owner: -1, pos: new T.Vector3() };
+}
+function addTrap(id, p, x, w, owner) {
+  for (let i = 0; i < trapPool.length; i++) if (trapPool[i].on && trapPool[i].id === id) return trapPool[i];
+  let t = null; for (let i = 0; i < trapPool.length; i++) if (!trapPool[i].on) { t = trapPool[i]; break; }
+  if (!t) return null;
+  t.on = true; t.id = id; t.p = p; t.x = x; t.w = w || TRAP_W; t.ph = id * 1.3; t.born = api.now(); t.owner = owner == null ? -1 : owner;
+  api.trackToWorld(p, x, TP, TD); t.pos.copy(TP); t.g.position.set(TP.x, 0.3, TP.z); t.g.scale.setScalar(0.01); t.g.visible = true;
+  snd.plop(); ring(TP.x, 0.12, TP.z, 0.6, 4, 0.6, 0xffc2e2);
+  for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; part(TP.x, 0.4, TP.z, Math.cos(a) * 2.2, 2.5, Math.sin(a) * 2.2, 0.5, 0.14, 0, 7, 9, false); }
+  return t;
+}
+function removeTrap(t) { t.on = false; t.g.visible = false; }
+function trapById(id) { for (let i = 0; i < trapPool.length; i++) if (trapPool[i].on && trapPool[i].id === id) return trapPool[i]; return null; }
+function updTraps(dt, t) {
+  const mp = api.me ? api.me.p : 0;
+  for (let i = 0; i < trapPool.length; i++) {
+    const q = trapPool[i]; if (!q.on) continue;
+    q.g.visible = Math.abs(q.p - mp) < 150; if (!q.g.visible) continue;
+    const k = Math.min(1, q.g.scale.x + dt * 5); q.g.scale.setScalar(k > 0.99 ? 1 + Math.sin(t * 3 + q.ph) * 0.02 : k * (1 + (1 - k) * 0.3));
+    q.g.position.y = 0.3 + Math.sin(t * 2 + q.ph) * 0.08; q.g.rotation.y = t * 0.4 + q.ph;
+    q.rg.material.opacity = 0.35 + Math.sin(t * 4 + q.ph) * 0.2;
+  }
+}
+// glaseado reventado: particulas rosas/blancas/chispas + splat
+function glazeBurst(x, z) {
+  snd.splat();
+  for (let i = 0; i < 26; i++) { const a = Math.random() * 6.283, v = 2 + Math.random() * 5; part(x, 0.6, z, Math.cos(a) * v, 3 + Math.random() * 5, Math.sin(a) * v, 0.9, 0.22, 0, i % 3 === 0 ? 6 : i % 3 === 1 ? 7 : (i % 5) + 1, 10, false); }
+  ring(x, 0.12, z, 0.8, 6, 0.6, 0xffc2e2); ring(x, 0.12, z, 0.4, 3.5, 0.45, 0xffffff);
+}
+function stain(r, sec) {
+  const pu = puOf(r); pu.stainUntil = api.now() + sec * 1000;
+  if (!pu.stain) {
+    const g = new THREE.Group(); g.position.y = 0.25;
+    for (let i = 0; i < 6; i++) {
+      const m = new THREE.Mesh(G.sphLo, i % 2 ? G.stainP : G.stainW); const a = i * 1.9, h = 0.15 + (i % 3) * 0.17;
+      m.position.set(Math.cos(a) * 0.4, h, Math.sin(a) * 0.4 - 0.05); m.scale.set(0.17 + (i % 2) * 0.05, 0.1, 0.17); m.lookAt(m.position.x * 2, m.position.y * 1.2 + 0.1, m.position.z * 2);
+      g.add(m);
+    }
+    g.visible = false; r.duck.bob.add(g); pu.stain = g;
+  }
+  pu.stain.visible = true;
+}
+
+/* ---------- overlay de glaseado (DOM canvas) ---------- */
+let glzFull = null, glzSplat = null, glzT = 0, glzDur = 3, splT = 0;
+const SPR_COL = ['#ffffff', '#ffe14a', '#4dd8ff', '#7dff7a', '#b57bff', '#ff6a9a'];
+function sprinkles(c, W, H, n) {
+  for (let i = 0; i < n; i++) {
+    const x = Math.random() * W, y = Math.random() * H, a = Math.random() * 3.14, l = 12 + Math.random() * 10;
+    c.strokeStyle = SPR_COL[i % 6]; c.lineWidth = 5; c.lineCap = 'round'; c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); c.stroke();
+  }
+}
+function drawFull() {
+  const W = glzFull.width, H = glzFull.height, c = glzFull.getContext('2d');
+  c.clearRect(0, 0, W, H);
+  const gr = c.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, 'rgba(255,252,253,0.97)'); gr.addColorStop(0.7, 'rgba(255,244,249,0.95)'); gr.addColorStop(1, 'rgba(255,214,234,0.9)');
+  c.fillStyle = gr; c.beginPath(); c.moveTo(0, 0); c.lineTo(W, 0);
+  c.lineTo(W, H * 0.8);                       // borde inferior ondulado con chorreones
+  for (let x = W; x > 0; x -= 14) c.lineTo(x, H * 0.8 + Math.sin(x * 0.05) * 14 + (((x / 14) | 0) % 5 === 0 ? 20 + Math.random() * H * 0.14 : Math.random() * 12));
+  c.lineTo(0, H * 0.8); c.closePath(); c.fill();
+  for (let i = 0; i < 9; i++) {                // vetas rosadas de glaseado
+    c.strokeStyle = 'rgba(255,126,182,' + (0.25 + Math.random() * 0.25) + ')'; c.lineWidth = 14 + Math.random() * 30; c.lineCap = 'round';
+    c.beginPath(); const y = Math.random() * H * 0.75; c.moveTo(-20, y); c.bezierCurveTo(W * 0.3, y + 70, W * 0.6, y - 70, W + 20, y + 20); c.stroke();
+  }
+  for (let i = 0; i < 26; i++) {               // gotas chorreando
+    const x = Math.random() * W, y0 = Math.random() * H * 0.5, l = 40 + Math.random() * H * 0.3, w = 8 + Math.random() * 14;
+    c.fillStyle = i % 3 === 0 ? 'rgba(255,170,206,0.95)' : 'rgba(255,255,255,0.97)'; c.beginPath(); c.moveTo(x - w, y0); c.lineTo(x + w, y0); c.lineTo(x + w, y0 + l); c.arc(x, y0 + l, w, 0, 3.1416); c.closePath(); c.fill();
+  }
+  c.fillStyle = 'rgba(255,255,255,0.7)'; c.beginPath(); c.ellipse(W * 0.3, H * 0.18, W * 0.22, 14, -0.1, 0, 6.3); c.fill();   // brillo
+  sprinkles(c, W, H * 0.85, 90);
+}
+function drawSplat() {
+  const W = glzSplat.width, H = glzSplat.height, c = glzSplat.getContext('2d');
+  c.clearRect(0, 0, W, H);
+  for (let k = 0; k < 5; k++) {
+    const x = Math.random() * W, y = Math.random() * H * 0.8, r = 50 + Math.random() * 70;
+    c.fillStyle = 'rgba(255,150,200,0.95)'; c.beginPath(); c.arc(x, y, r * 1.12, 0, 6.3); c.fill();
+    c.fillStyle = 'rgba(255,252,253,0.97)'; c.beginPath(); c.arc(x, y, r, 0, 6.3); c.fill();
+    c.fillRect(x - 8, y, 16, r * 1.3); c.beginPath(); c.arc(x, y + r * 1.3, 8, 0, 6.3); c.fill();
+    sprinkles(c, W, H, 0);
+    for (let i = 0; i < 6; i++) { const a = Math.random() * 6.3, d = Math.random() * r * 0.8; c.strokeStyle = SPR_COL[i]; c.lineWidth = 5; c.lineCap = 'round'; c.beginPath(); c.moveTo(x + Math.cos(a) * d, y + Math.sin(a) * d); c.lineTo(x + Math.cos(a) * d + 10, y + Math.sin(a) * d + 4); c.stroke(); }
+  }
+}
+function buildGlaze() {
+  const mk = z => { const c = document.createElement('canvas'); c.width = Math.max(320, innerWidth >> 1); c.height = Math.max(240, innerHeight >> 1);
+    c.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;display:none;z-index:' + z; api.hudRoot.appendChild(c); return c; };
+  glzFull = mk(9); glzSplat = mk(8);
+}
+function showGlaze(sec) { drawFull(); glzDur = sec; glzT = sec; glzFull.style.display = 'block'; glzFull.style.transform = ''; glzFull.style.opacity = 1; }
+function showSplat(sec) { drawSplat(); splT = sec; glzSplat.style.display = 'block'; glzSplat.style.opacity = 1; }
+function updGlaze(dt) {
+  if (glzT > 0) {
+    glzT -= dt;
+    if (glzT <= 0) glzFull.style.display = 'none';
+    else {
+      const e = glzDur - glzT, last = Math.min(1, glzT / 1.0);      // ultimo segundo: se limpia cayendo
+      const y = last < 1 ? (1 - last) * (1 - last) * 110 : Math.min(8, e * 3);
+      glzFull.style.transform = 'translateY(' + y.toFixed(1) + '%)';
+      glzFull.style.opacity = last < 1 ? 0.35 + last * 0.65 : 1;
+    }
+  }
+  if (splT > 0) { splT -= dt; if (splT <= 0) glzSplat.style.display = 'none'; else glzSplat.style.opacity = Math.min(1, splT / 0.5); }
+}
+
+function triggerDonut(t, tg, splash, blindSec) {
+  const pos = t ? t.pos : (tg ? tg.duck.root.position : null);
+  if (pos) glazeBurst(pos.x, pos.z);
+  if (t) removeTrap(t);
+  if (tg) { stain(tg, blindSec); if (tg === api.me) showGlaze(blindSec); }
+  for (let i = 0; i < splash.length; i++) { const q = splash[i]; if (!q || q === tg) continue; stain(q, 1.5); if (q === api.me) showSplat(1.5); }
+}
+let trapSeq = 0;
+function dropLocal(r) { addTrap(9000 + (trapSeq++), r.p - 3, r.x, TRAP_W, r.slot); }
+function trapTriggersLocal(n) {   // offline: misma regla que el servidor (radio de la dona, no en el aire/gigante, dueno inmune 1 s)
+  const R = api.racers;
+  for (let i = 0; i < trapPool.length; i++) {
+    const t = trapPool[i]; if (!t.on) continue;
+    for (let k = 0; k < R.length; k++) {
+      const r = R[k];
+      if (r.finished || r.dead || n < (r.airUntil || 0) || n < (r.giantUntil || 0)) continue;
+      if (r.slot === t.owner && n < t.born + 1000) continue;
+      if (Math.abs(r.p - t.p) > (api.consts.DONUT_R_P || 1.5) || Math.abs(r.x - t.x) > t.w / 2) continue;
+      const sp = [];
+      for (let j = 0; j < R.length; j++) if (R[j] !== r && Math.hypot(R[j].p - t.p, R[j].x - t.x) < 7) sp.push(R[j]);
+      triggerDonut(t, r, sp, 3); break;
+    }
+  }
+}
+
 /* ---------- megafono ---------- */
 function makeShoutSprites() {
   const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160;
@@ -461,6 +619,7 @@ const pending = [];   // impactos de misiles locales: {at, tgt, from}
 function fireLocal(r, kind) {
   const n = api.now();
   if (kind === 'gigante') { r.giantUntil = n + GIANT_MS; return; }
+  if (kind === 'dona') { dropLocal(r); return; }
   if (kind === 'megafono') {
     showShout(r, 0, 0);
     const near = [], R = api.racers;
@@ -511,6 +670,7 @@ function botLogic(r, pu, n) {
   let ok = false; const R = api.racers;
   for (let i = 0; i < R.length; i++) {
     const q = R[i]; if (q === r || q.finished || q.dead) continue;
+    if (r.item === 'dona') { if (q.p < r.p && r.p - q.p < 25) { ok = true; break; } continue; }
     if (r.item === 'gigante') { if (n >= (r.giantUntil || 0) && Math.hypot(q.p - r.p, q.x - r.x) < 30) { ok = true; break; } continue; }
     if (r.item === 'megafono' ? Math.hypot(q.p - r.p, q.x - r.x) < 14 : (q.p > r.p && q.p - r.p < 90)) { ok = true; break; }
   }
@@ -529,11 +689,13 @@ function update(dt, t) {
     pending.splice(i, 1); stunLocal(q.tgt, n);
   }
   const live = racing && n >= startAt;
+  if (live && !api.isOnline()) trapTriggersLocal(n);
   for (let i = 0; i < R.length; i++) {
     const r = R[i], pu = puOf(r);
     pu.baz.visible = r.item === 'bazooka'; pu.meg.visible = r.item === 'megafono';
     if (pu.recoil > 0) { pu.recoil = Math.max(0, pu.recoil - dt * 1.8); pu.baz.position.z = -0.02 + pu.recoil; }
     if (pu.pulse > 0) { pu.pulse = Math.max(0, pu.pulse - dt * 2.5); pu.meg.scale.setScalar(1.3 * (1 + pu.pulse * 0.5)); }
+    if (pu.stain && pu.stain.visible && n > pu.stainUntil) pu.stain.visible = false;
     updGiant(r, pu, n, t, dt);
     updStun(r, pu, n, t, r === me);
     if (live && !r.finished && !r.dead && api.isSim(r)) {
@@ -542,7 +704,8 @@ function update(dt, t) {
       if (r.kind === 'bot') botLogic(r, pu, n);
     }
   }
-  updMissiles(dt, t); updShout(dt); updPing(dt); updFx(dt);
+  updTraps(dt, t);
+  updGlaze(dt); updMissiles(dt, t); updShout(dt); updPing(dt); updFx(dt);
   if (me && me.giantScale > 1) fx.camUp += (me.giantScale - 1) * 0.8;
   refreshHud();
 }
@@ -557,6 +720,15 @@ function onNet(m) {
     case 'shout': r = bySlot(m.from); if (r) showShout(r, 0, 0);
       if (m.targets) for (let i = 0; i < m.targets.length; i++) { const q = bySlot(m.targets[i]); if (q && api.now() < (q.giantUntil || 0)) showPing(q); }
       break;
+    case 'trapAdd': addTrap(m.id, m.p, m.x, m.r > 0 ? m.r * 2 : m.w, m.by); break;
+    case 'trapGone': o = trapById(m.id); if (o) removeTrap(o); break;
+    case 'donut': {
+      o = trapById(m.id != null ? m.id : m.trap); r = bySlot(m.target);
+      if (!o && r) { let bd = 1e9; for (let i = 0; i < trapPool.length; i++) { const q = trapPool[i]; if (!q.on) continue; const d = Math.hypot(q.p - r.p, q.x - r.x); if (d < bd) { bd = d; o = q; } } if (bd > 8) o = null; }
+      const sp = []; if (m.splash) for (let i = 0; i < m.splash.length; i++) { const q = bySlot(typeof m.splash[i] === 'object' ? m.splash[i].slot : m.splash[i]); if (q) sp.push(q); }
+      const dur = m.blindUntil ? Math.min(4, Math.max(1, (m.blindUntil - api.now()) / 1000)) : 3;
+      triggerDonut(o, r, sp, dur); break;
+    }
     case 'giant': r = bySlot(m.slot); if (r) r.giantUntil = m.until; break;
     case 'stun': r = bySlot(m.slot); if (r) r.stunUntil = m.until; break;
     case 'miss': snd.miss(); break;
@@ -567,12 +739,16 @@ function clearRacers() {
   for (let i = 0; i < R.length; i++) { const r = R[i], pu = puOf(r); r.item = null; r.stunUntil = 0; r.giantUntil = 0; r.giantScale = 1; r.duck.root.scale.setScalar(1); pu.aura.visible = false; pu.giantOn = false; pu.giantSeen = 0; pu.bumped.fill(0); pu.immuneUntil = 0; pu.stunSeen = 0; pu.baz.visible = pu.meg.visible = false; }
   for (let i = 0; i < missiles.length; i++) { missiles[i].on = false; missiles[i].g.visible = false; }
   pending.length = 0;
+  for (let i = 0; i < trapPool.length; i++) removeTrap(trapPool[i]);
+  for (let i = 0; i < R.length; i++) { const pu = R[i]._pu; if (pu && pu.stain) pu.stain.visible = false; }
+  if (glzFull) { glzFull.style.display = 'none'; glzSplat.style.display = 'none'; glzT = splT = 0; }
 }
 function onRaceStart(st) {
   racing = true; startAt = (st && st.startAt) || 0;
   clearRacers();
   const list = st && st.boxes ? st.boxes : genOfflineBoxes((st && st.seed) | 0);
   setBoxes(list);
+  if (st && st.traps) for (let i = 0; i < st.traps.length; i++) addTrap(st.traps[i].id, st.traps[i].p, st.traps[i].x, st.traps[i].r > 0 ? st.traps[i].r * 2 : st.traps[i].w, st.traps[i].by);
   rngKind = api.rng(((st && st.seed) ^ 0x7777aaaa) >>> 0);
 }
 function onRaceEnd() {
@@ -588,7 +764,8 @@ function init(a) {
   buildShared(); mkParts(220); mkRings(12);
   boxRoot = new THREE.Group(); scene.add(boxRoot);
   for (let i = 0; i < 4; i++) missiles.push(makeMissile());
-  makeShoutSprites(); buildHud();
+  for (let i = 0; i < 6; i++) trapPool.push(makeTrapMesh());
+  makeShoutSprites(); buildHud(); buildGlaze();
   for (let i = 0; i < 3; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: G.pingM, transparent: true, depthTest: false, opacity: 0 })); sp.visible = false; sp.renderOrder = 21; scene.add(sp); pingSprites.push({ sp, life: 0, x: 0, y: 0, z: 0 }); }
   const sq = audio.squeak; audio.squeak = function (a, b, c) { return sq.call(this, a, b, (c || 1) * (api.me && api.now() < (api.me.giantUntil || 0) ? 0.55 : 1)); };   // voz grave de gigante
   window.addEventListener('mousedown', onMouse);

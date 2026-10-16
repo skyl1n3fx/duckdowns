@@ -127,9 +127,10 @@ function complete() {
 }
 function onKey(e) {
   if (!racing || e.repeat || !api) return;
-  if (usesLeft <= 0 || api.now() < cdUntil) { if (idx) { idx = 0; showKeys(0); } return; }
   if (e.target && e.target.tagName === 'INPUT') return;
   const k = (e.key || '').toLowerCase(); if (k.length !== 1) return;
+  cKey(k);
+  if (usesLeft <= 0 || api.now() < cdUntil) { if (idx) { idx = 0; showKeys(0); } return; }
   if (k === CODE[idx]) { idx++; showKeys(idx); snd.key(idx - 1); if (idx === 4) complete(); }
   else if (idx > 0) { idx = k === CODE[0] ? 1 : 0; badKey(); if (idx === 1) { showKeys(1); snd.key(0); } }
 }
@@ -204,11 +205,101 @@ function resetAll() {
   stopFx();
 }
 
+/* ---------- CANGRI: segundo codigo secreto (foto a pantalla completa para los demas) ---------- */
+const CCODE = 'cangri', C_FLASH_MS = 1500, C_STUN_MS = 1000;
+let cIdx = 0, cUses = 2, cCdUntil = 0, cUsedOnce = false, cKeysEl = null, cCaps = [], cHud = null, cHudTxt = null, cHudRing = null, cHudLast = '';
+let cSfx = null, cSfxOk = true;
+let cFlash = null, cFlashT = 0, cSprite = null, cSpriteT = 0, cSpriteOwner = null, cImg = null;
+const cCdMs = () => ((api.consts.CANGRI_COOLDOWN_S > 0 ? api.consts.CANGRI_COOLDOWN_S : 15) * 1000);
+function buildCangriDom() {
+  const st = document.createElement('style');
+  st.textContent =
+    '#cangriKeys{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);display:flex;gap:clamp(6px,1.4vw,14px);pointer-events:none;z-index:3;opacity:0;transition:opacity .2s}' +
+    '#cangriKeys.on{opacity:1}#cangriKeys.bad{animation:kkBad .35s ease-in-out}' +
+    '#cangriKeys .kkc{width:clamp(44px,8.5vw,92px);height:clamp(44px,8.5vw,92px);font-size:clamp(26px,5.4vw,56px)}' +
+    '#cangriKeys .kkc.lit{background:linear-gradient(#ffe680,#f2a900);-webkit-text-stroke:3px #8a5200;box-shadow:0 10px 0 #a86a00,0 0 36px 8px rgba(255,200,60,.85)}' +
+    '#cangriHud{position:absolute;left:18px;top:140px;display:flex;align-items:center;gap:8px;pointer-events:none;z-index:2;font:700 clamp(13px,2vw,18px) Fredoka,"Trebuchet MS",sans-serif;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.35);background:rgba(80,50,0,.5);border:3px solid #ffd45a;border-radius:999px;padding:3px 12px 3px 4px}' +
+    '#cangriHud .khr{width:22px;height:22px;border-radius:50%;box-shadow:0 0 10px rgba(255,212,90,.7)}' +
+    '#cangriFlash{position:absolute;left:50%;top:50%;width:min(80vmin,92vw);height:auto;max-height:90vh;object-fit:contain;border-radius:24px;pointer-events:none;z-index:12;opacity:0;display:none;transform:translate(-50%,-50%) scale(.6);box-shadow:0 0 60px rgba(255,200,60,.9)}' +
+    '#cangriFlash.go{display:block;animation:cgFlash 1.5s linear forwards}' +
+    '@keyframes cgFlash{0%{opacity:0;transform:translate(-50%,-50%) scale(.5) rotate(-6deg)}8%{opacity:1;transform:translate(-50%,-50%) scale(1.08) rotate(2deg)}14%{transform:translate(-50%,-50%) scale(1) rotate(0)}78%{opacity:1;transform:translate(-50%,-50%) scale(1.02)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.06)}}';
+  document.head.appendChild(st);
+  cKeysEl = document.createElement('div'); cKeysEl.id = 'cangriKeys';
+  for (let i = 0; i < 6; i++) { const c = document.createElement('div'); c.className = 'kkc'; c.textContent = CCODE[i].toUpperCase(); cKeysEl.appendChild(c); cCaps.push(c); }
+  api.hudRoot.appendChild(cKeysEl);
+  cHud = document.createElement('div'); cHud.id = 'cangriHud'; cHud.style.display = 'none';
+  cHudRing = document.createElement('div'); cHudRing.className = 'khr'; cHudTxt = document.createElement('span'); cHud.append(cHudRing, cHudTxt); api.hudRoot.appendChild(cHud);
+  try { cSfx = new Audio('sfx/cangri.mp3'); cSfx.preload = 'auto'; cSfx.volume = 0.6; cSfx.addEventListener('error', () => { cSfxOk = false; }); } catch (e) { cSfx = null; cSfxOk = false; }
+  cImg = new Image(); cImg.src = 'cangri.webp';           // precarga
+  cFlash = document.createElement('img'); cFlash.id = 'cangriFlash'; cFlash.alt = ''; cFlash.src = 'cangri.webp'; api.hudRoot.appendChild(cFlash);
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160; const c = cv.getContext('2d');
+  c.font = '900 104px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineWidth = 16; c.lineJoin = 'round';
+  c.strokeStyle = '#7a4a00'; c.strokeText('¡CANGRI!', 256, 84); c.fillStyle = '#ffd45a'; c.fillText('¡CANGRI!', 256, 84);
+  cSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthTest: false, opacity: 0 }));
+  cSprite.visible = false; cSprite.renderOrder = 22; cSprite.scale.set(4, 1.25, 1); scene.add(cSprite);
+}
+function cShowKeys(n) {
+  for (let i = 0; i < 6; i++) { const on = i < n, c = cCaps[i]; if (on && !c.classList.contains('lit')) { c.classList.remove('lit'); void c.offsetWidth; c.classList.add('lit'); } else if (!on) c.classList.remove('lit'); }
+  cKeysEl.classList.toggle('on', n > 0);
+}
+function cHudUpdate() {
+  if (!cHud) return;
+  if (!cUsedOnce) { cHud.style.display = 'none'; return; }
+  const left = cCdUntil - api.now(), cd = left > 0;
+  const txt = 'CANGRI ×' + cUses + (cd ? ' ' + Math.ceil(left / 1000) + 's' : '');
+  const deg = cd ? Math.round(360 * (1 - left / cCdMs()) / 6) * 6 : 360;
+  const key = txt + deg; if (key === cHudLast) return; cHudLast = key;
+  cHud.style.display = 'flex'; cHudTxt.textContent = txt;
+  cHudRing.style.background = 'conic-gradient(#ffd45a ' + deg + 'deg,rgba(255,255,255,.25) ' + deg + 'deg)';
+  cHud.style.opacity = cUses > 0 ? (cd ? '0.8' : '1') : '0.5';
+}
+function cPlay() {   // audio de CANGRI para todos (autor incluido); si falla, queda el sintetizado de respaldo
+  if (audio && audio.muted) return true;
+  if (!cSfx || !cSfxOk) return false;
+  try { cSfx.currentTime = 0; const pr = cSfx.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (e) { return false; }
+  return true;
+}
+function cApply(m) {
+  const played = cPlay();   // llega cangri{from,flashMs}: el autor ve un cartel sobre su pato; los demas, foto y temblor
+  const me = api.me, au = bySlot(m.from);
+  if (me && m.from === me.slot) { cSpriteOwner = au; cSpriteT = 1.3; if (!played && snd.ok()) audio.squeak(1, 'squeeze', 1.6); return; }
+  const ms = m.flashMs > 0 ? m.flashMs : C_FLASH_MS;
+  cFlash.style.animationDuration = (ms / 1000) + 's'; cFlash.classList.remove('go'); void cFlash.offsetWidth; cFlash.classList.add('go'); cFlashT = ms / 1000;
+  api.shake(1.4); if (!played && snd.ok()) { audio.boom(); audio.squeak(1.2, 'squeeze', 1.9); }
+  cSpriteOwner = au; cSpriteT = 1.3;
+}
+function cComplete() {
+  snd.done(); setTimeout(() => { if (cKeysEl) cKeysEl.classList.remove('on'); }, 700);
+  cIdx = 0; cUsedOnce = true; cUses--; cCdUntil = api.now() + cCdMs(); cHudUpdate();
+  if (api.isOnline()) { api.send({ t: 'cangri' }); return; }
+  const n = api.now(), me = api.me, R = api.racers;
+  cApply({ from: me.slot });
+  for (let i = 0; i < R.length; i++) { const r = R[i]; if (r !== me && !r.dead && n >= (r.airUntil || 0) && n >= (r.giantUntil || 0)) r.stunUntil = n + C_STUN_MS; }
+}
+function cKey(k) {
+  if (cUses <= 0 || api.now() < cCdUntil) { if (cIdx) { cIdx = 0; cShowKeys(0); } return; }
+  if (k === CCODE[cIdx]) { cIdx++; cShowKeys(cIdx); snd.key(cIdx - 1); if (cIdx === 6) cComplete(); }
+  else if (cIdx > 0) {
+    cIdx = k === CCODE[0] ? 1 : 0; cKeysEl.classList.remove('bad'); void cKeysEl.offsetWidth; cKeysEl.classList.add('bad');
+    setTimeout(() => { if (cIdx === 0) cShowKeys(0); }, 260); if (cIdx === 1) { cShowKeys(1); snd.key(0); }
+  }
+}
+function cUpdate(dt) {
+  if (cFlashT > 0) cFlashT -= dt;
+  if (cSpriteT > 0 && cSpriteOwner) {
+    cSpriteT -= dt;
+    if (cSpriteT <= 0) cSprite.visible = false;
+    else { const u = 1 - cSpriteT / 1.3, q = cSpriteOwner.duck.root.position, k = 1 + Math.sin(Math.min(1, u * 4) * Math.PI) * 0.3;
+      cSprite.visible = true; cSprite.position.set(q.x, 2.4 + u * 1.2, q.z); cSprite.scale.set(4 * k, 1.25 * k, 1); cSprite.material.opacity = u > 0.7 ? (1 - u) / 0.3 : 1; }
+  }
+  cHudUpdate();
+}
+
 window.DuckUfo = {
   init(a) {
     api = a; THREE = a.THREE; scene = a.scene; audio = a.audio; camera = a.camera;
     T1 = new THREE.Vector3(); T2 = new THREE.Vector3(); T3 = new THREE.Vector3(); UP = new THREE.Vector3(0, 1, 0);
-    buildDom(); buildShared();
+    buildDom(); buildCangriDom(); buildShared();
     for (let i = 0; i < 3; i++) ufos.push(makeUfo(false));
     for (let i = 0; i < 3; i++) minis.push(makeUfo(true));
     for (let i = 0; i < 8; i++) {
@@ -217,13 +308,15 @@ window.DuckUfo = {
     }
     window.addEventListener('keydown', onKey);
   },
-  onRaceStart() { racing = true; usesLeft = (api.consts.UFO_PER_RACE | 0) || 3; cdUntil = 0; usedOnce = false; hudLast = ''; resetAll(); hudUpdate(); },
-  update(dt, t) { update(dt, t); if (racing) hudUpdate(); },
+  onRaceStart() { racing = true; usesLeft = (api.consts.UFO_PER_RACE | 0) || 3; cdUntil = 0; usedOnce = false; hudLast = ''; cIdx = 0; cUses = (api.consts.CANGRI_PER_RACE | 0) || 2; cCdUntil = 0; cUsedOnce = false; cHudLast = ''; if (cKeysEl) cShowKeys(0); resetAll(); hudUpdate(); },
+  update(dt, t) { update(dt, t); if (racing) { hudUpdate(); cUpdate(dt); } },
   onNet(m) {
     if (!m) return;
-    if (m.t === 'ufo') { activate(m); const me = api.me; if (me && m.from === me.slot) { if (typeof m.usesLeft === 'number') usesLeft = m.usesLeft; if (typeof m.cooldownUntil === 'number') cdUntil = m.cooldownUntil; } }
+    if (m.t === 'cangri') cApply(m);
+    else if (m.t === 'cangriState' || m.t === 'cangriNo') { if (typeof m.usesLeft === 'number') cUses = m.usesLeft; if (typeof m.cooldownUntil === 'number') cCdUntil = m.cooldownUntil; cUsedOnce = cUsedOnce || m.t === 'cangriNo' || cUses < 2; }
+    else if (m.t === 'ufo') { activate(m); const me = api.me; if (me && m.from === me.slot) { if (typeof m.usesLeft === 'number') usesLeft = m.usesLeft; if (typeof m.cooldownUntil === 'number') cdUntil = m.cooldownUntil; } }
     else if (m.t === 'kirkNo' || m.t === 'kirkState') { if (typeof m.usesLeft === 'number') usesLeft = m.usesLeft; if (typeof m.cooldownUntil === 'number') cdUntil = m.cooldownUntil; }
   },
-  onRaceEnd() { racing = false; resetAll(); if (hudEl) hudEl.style.display = 'none'; },
+  onRaceEnd() { racing = false; resetAll(); if (hudEl) hudEl.style.display = 'none'; cIdx = 0; if (cKeysEl) { cShowKeys(0); cHud.style.display = 'none'; cFlash.classList.remove('go'); cSprite.visible = false; } },
 };
 })();
