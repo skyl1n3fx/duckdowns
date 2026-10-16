@@ -20,6 +20,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#7fd6ff;fon
 #prog{left:50%;transform:translateX(-50%);bottom:16px;width:min(70vw,640px);height:22px;border-radius:12px;background:rgba(0,0,0,.35);border:3px solid #fff}
 #prog i{position:absolute;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;border:2px solid #fff;transition:left .15s linear}
 #count{inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(90px,26vw,260px);font-weight:700;color:#ffe14a;-webkit-text-stroke:6px #c2410c;paint-order:stroke fill}
+#lookBack{left:50%;transform:translateX(-50%);top:14px;font-size:clamp(14px,2.2vw,22px);font-weight:700;background:rgba(0,0,0,.35);padding:4px 16px;border-radius:999px;border:3px solid #fff}
 #msg{left:0;right:0;top:22%;text-align:center;font-size:clamp(24px,5vw,54px);font-weight:700;color:#fff;-webkit-text-stroke:3px #7c3aed;paint-order:stroke fill}
 .ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px;background:radial-gradient(circle at 50% 40%,rgba(255,225,74,.55),rgba(56,189,248,.82));z-index:5;overflow:auto}
 #start.live{background:linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.12) 70%);justify-content:flex-start}
@@ -83,6 +84,7 @@ im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})()
 <div id="prog" class="hud"></div>
 <div id="count" class="hud"></div>
 <div id="msg" class="hud"></div>
+<div id="lookBack" class="hud hide">👀 Mirando atrás</div>
 <div id="start" class="ov">
 <h1>Carrera de Patos de Hule</h1>
 <p>Machaca <b>cualquier tecla</b> lo más rápido que puedas para nadar (mantenerla apretada no cuenta). El <b>mouse</b> mueve tu pato a izquierda y derecha. Esquiva remolinos, ramas, sapos y nenúfares.<br><b>Solo el 1º, 2º y 3º se salvan: a los demás les cae un meteorito.</b></p>
@@ -589,7 +591,13 @@ function calcKps(now){let c=0;for(let i=0;i<64;i++)if(now-keyTimes[i]<CFG.WINDOW
 addEventListener('keydown',onKey,{passive:false});
 addEventListener('keyup',e=>{if(e.target&&e.target.tagName==='INPUT')return;if(e.key!=='F5'&&e.key!=='F12')e.preventDefault();},{passive:false});
 addEventListener('pointermove',e=>{mouseNX=(e.clientX/innerWidth)*2-1;});
-addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('contextmenu',e=>{if(game.state==='race'||game.state==='countdown')e.preventDefault();});
+// mirar hacia atras: mantener click derecho durante la carrera (no dispara power-ups: eso es el click izquierdo)
+let lookBack=false;const elBack=document.getElementById('lookBack');
+function setLookBack(v){if(v===lookBack)return;lookBack=v;elBack.classList.toggle('hide',!v);}
+addEventListener('pointerdown',e=>{if(e.button!==2||game.state!=='race')return;if(e.target.closest&&e.target.closest('button,input,a,.btn,.ov'))return;setLookBack(true);});
+addEventListener('pointerup',e=>{if(e.button===2)setLookBack(false);});
+addEventListener('blur',()=>setLookBack(false));
 
 /* ===== FISICA ===== */
 function hitFx(r,intensity,type,pitch){
@@ -738,9 +746,44 @@ function scoreOf(r){return r.finished?1e6-r.fTime:r.p;}
 function rankOf(r){let k=1;const s=scoreOf(r);for(let i=0;i<racers.length;i++)if(racers[i]!==r&&scoreOf(racers[i])>s)k++;return k;}
 
 // Música opcional: si hay un musica.mp3 local junto al HTML, suena en loop (no se versiona).
-const music=new Audio('musica.mp3');music.loop=true;music.volume=0.45;
+// Con servidor: GET /musica.json (lista de mp3) y /musica/<nombre>; si falla o viene vacio, musica.mp3 local; si no existe, silencio.
+const mus={list:null,a:[new Audio(),new Audio()],cur:0,last:'',started:false,mode:'lobby',fade:0,vol:[0,0],target:0.18,fb:false};
+for(const el of mus.a){el.loop=true;el.preload='auto';el.addEventListener('error',()=>{if(el.src&&!mus.fb&&el===mus.a[mus.cur]){mus.fb=true;musPlay('musica.mp3');}});}
+(function(){
+  const done=l=>{mus.list=Array.isArray(l)?l.filter(x=>typeof x==='string'&&/\.mp3$/i.test(x)):[];if(!mus.list.length)mus.list=null;if(mus.started)musMode(mus.mode,true);};
+  if(location.protocol!=='http:'&&location.protocol!=='https:'){done(null);return;}
+  fetch('/musica.json').then(r=>r.ok?r.json():null).then(j=>done(j&&Array.isArray(j.files)?j.files:j)).catch(()=>done(null));
+})();
+function musPick(){
+  if(!mus.list)return 'musica.mp3';
+  let n=mus.list[(Math.random()*mus.list.length)|0],g=0;
+  while(n===mus.last&&mus.list.length>1&&g++<8)n=mus.list[(Math.random()*mus.list.length)|0];
+  mus.last=n;return '/musica/'+encodeURIComponent(n);
+}
+function musPlay(url){
+  const old=mus.a[mus.cur];mus.cur=1-mus.cur;const el=mus.a[mus.cur];
+  el.src=url;el.currentTime=0;el.volume=0;el.muted=!!audio.muted;mus.vol[mus.cur]=0;mus.fade=0.6;
+  const pr=el.play();if(pr&&pr.catch)pr.catch(()=>{});
+  void old;
+}
+function musMode(mode,force){
+  if(mode===mus.mode&&!force&&mus.started)return;
+  mus.mode=mode;mus.target=mode==='race'?0.45:0.18;mus.fb=false;
+  if(mus.started)musPlay(musPick());
+}
+function musTick(dt){ // fundido cruzado
+  if(!mus.started)return;
+  const n=mus.a[mus.cur],o=mus.a[1-mus.cur],k=mus.fade>0?dt/0.6:1;
+  mus.fade=Math.max(0,mus.fade-dt);
+  if(n.volume<mus.target)n.volume=Math.min(mus.target,n.volume+mus.target*k);
+  else if(n.volume>mus.target)n.volume=mus.target;
+  if(o.volume>0){o.volume=Math.max(0,o.volume-0.45*k);if(o.volume===0)o.pause();}
+  n.muted=o.muted=!!audio.muted;
+}
+function musStart(){if(mus.started)return;mus.started=true;musPlay(musPick());}
+addEventListener('pointerdown',musStart,{once:true});addEventListener('keydown',musStart,{once:true});
 function startRace(spec,startAt){
-  music.currentTime=0;music.play().catch(()=>{});
+  musMode('race');
   for(const L of lobbyDucks)L.duck.root.visible=false;
   elFlash.classList.remove('go');
   game.online=!!spec;game.startAt=startAt||0;if(!spec)buildObstacles(777);
@@ -896,7 +939,7 @@ function goLobby(text){
   elFlash.classList.remove('go');
   $('end').style.display='none';$('start').classList.remove('hide');
   elCount.textContent='';elMsg.textContent='';podium.visible=false;meteor.visible=false;meteorLight.intensity=0;
-  try{music.pause();}catch(e){}
+  musMode('lobby');
   setNet(text||(net.on?'':'Sin servidor: juegas contra bots'));renderLobby();
 }
 function nickChanged(){const n=myNick();store('duck.nick',$('nick').value.trim());if(net.on)send({t:'nick',nick:n});else resetRace();}
@@ -957,7 +1000,7 @@ function applyConsts(c){
   if(ok(c.BOT_MAX)){CFG.BOT_MAX=c.BOT_MAX;CFG.BOT_MIN=c.BOT_MAX-3.4;}
   if(ok(c.BOT_RUBBER))CFG.BOT_RUBBER=c.BOT_RUBBER;
   if(ok(c.BOT_CAP))CFG.BOT_CAP=c.BOT_CAP-0.2;
-  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG'])if(ok(c[k]))CFG[k]=c[k];
+  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','UFO_PER_RACE','UFO_COOLDOWN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG'])if(ok(c[k]))CFG[k]=c[k];
   if(rebuild&&game.state==='menu'){worldLen=-1;buildWorld(CFG.LENGTH);resetRace();buildDots();}
 }
 function onMsg(m){
@@ -1024,7 +1067,7 @@ const duckApi={THREE,scene,camera,audio,consts:CFG,racers,fx,hudRoot:document.bo
 const MODS=[window.DuckRamps,window.DuckPowerups,window.DuckUfo]; // orden: rampas -> power-ups
 function modCall(fn,a,b){for(let i=0;i<MODS.length;i++){const m=MODS[i];if(m&&typeof m[fn]==='function'){try{m[fn](a,b);}catch(e){console.error('mod',fn,e);}}}}
 function raceEnded(){fx.camUp=0;fx.camLock=false;fx.shakeX=fx.shakeY=0;modCall('onRaceEnd');}
-const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1};
+const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1,kirkNo:1,kirkState:1};
 
 /* ===== BUCLE PRINCIPAL ===== */
 const camPos=new THREE.Vector3(0,6,12),camLook=new THREE.Vector3(),goalPos=new THREE.Vector3(),goalLook=new THREE.Vector3();
@@ -1056,6 +1099,7 @@ function updateVisuals(dt,t){
     }
   }
 }
+let lbT=0,lbPrev=false;
 function updateCamera(dt,t){
   let fov=58;
   if(game.state==='menu'){if(net.on){goalPos.set(Math.sin(t*0.3)*2,3.2,14);goalLook.set(0,6.6,0);}else{goalPos.set(Math.sin(t*0.3)*9,4.2,10);goalLook.set(0,0.8,-2);}}
@@ -1065,10 +1109,12 @@ function updateCamera(dt,t){
     W(v.p-9,v.x+5.5);goalPos.set(WX,4.5,WZ);W(v.p,v.x);goalLook.set(WX,1.2,WZ);fov=52;
   }else{
     const sp=Math.max(0,player.vp);
-    W(player.p-CFG.CAM_BACK,player.x*0.65);goalPos.set(WX,CFG.CAM_UP,WZ);
-    W(player.p+9,player.x*0.85);goalLook.set(WX,1.1,WZ);fov=58+sp*0.9;
+    if(lookBack){W(player.p+CFG.CAM_BACK,player.x*0.65);goalPos.set(WX,CFG.CAM_UP,WZ);W(player.p-9,player.x*0.85);goalLook.set(WX,1.1,WZ);fov=62;}
+    else{W(player.p-CFG.CAM_BACK,player.x*0.65);goalPos.set(WX,CFG.CAM_UP,WZ);W(player.p+9,player.x*0.85);goalLook.set(WX,1.1,WZ);fov=58+sp*0.9;}
   }
-  const k=1-Math.exp(-(game.state==='finale'?3:7)*dt);
+  if(game.state!=='race'&&lookBack)setLookBack(false);
+  lbT=(lookBack!==lbPrev)?0.35:Math.max(0,lbT-dt);lbPrev=lookBack;
+  const k=1-Math.exp(-(game.state==='finale'?3:(lbT>0?18:7))*dt);
   camPos.lerp(goalPos,k);camLook.lerp(goalLook,Math.min(1,k*1.4));
   camera.position.copy(camPos);
   if(game.shake>0){camera.position.x+=(Math.random()-0.5)*game.shake;camera.position.y+=(Math.random()-0.5)*game.shake;game.shake=Math.max(0,game.shake-dt*2.2);}
@@ -1090,7 +1136,7 @@ function updateHud(){
 let last=performance.now()/1000,tAcc=0;
 function frame(){
   requestAnimationFrame(frame);
-  NOW=nowMs();const now=performance.now()/1000;let dt=now-last;last=now;if(dt>0.05)dt=0.05;
+  NOW=nowMs();const now=performance.now()/1000;let dt=now-last;last=now;musTick(dt>0.1?0.1:dt);if(dt>0.05)dt=0.05;
   tAcc+=dt;const t=tAcc;
   waterU.uT.value=t;
   for(const c of world.userData.clouds){c.position.x+=dt*1.2;if(c.position.x>TRK.maxX+260)c.position.x=TRK.minX-260;}
@@ -1132,7 +1178,7 @@ addEventListener('resize',resize);resize();
 buildWorld(CFG.LENGTH);modCall('init',duckApi);resetRace();buildDots();renderLobby();setNet('Conectando…');connect();
 $('go').addEventListener('click',onGo);
 $('again').addEventListener('click',()=>{audio.init();if(net.on)goLobby();else startRace();});
-window.__game=game;window.__net=net;window.__racers=racers;
+window.__game=game;window.__mus=mus;window.__net=net;window.__racers=racers;
 frame();
 </script>
 </body>
