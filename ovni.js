@@ -1,10 +1,13 @@
-/* ovni.js - codigo secreto KIRK: teclas en pantalla, OVNI toon con haz y laser, efectos alienigenas. Script clasico: window.DuckUfo.
+/* ovni.js - codigo secreto KIRK: teclas en pantalla, OVNI toon con haz y meteoritos, efectos alienigenas. Script clasico: window.DuckUfo.
    Contrato: init(api), onRaceStart(start), update(dt,t), onNet(msg), onRaceEnd(). Servidor: C->S kirk{}; S->C ufo{from(slot),serverNow,boostUntil,stunUntil} + stun por afectado. */
 (function () {
 'use strict';
-const CODE = 'kirk', BOOST_MS = 1500, STUN_MS = 1000, UFO_LIFE = 2.6;
+const CODE = 'kirk', BOOST_MS = 1500, UFO_LIFE = 2.6;
+let usesLeft = 3, cdUntil = 0, usedOnce = false, hudEl = null, hudTxt = null, hudRing = null, hudLast = '';
+const stunMs = () => ((api.consts.UFO_STUN_S > 0 ? api.consts.UFO_STUN_S : 3) * 1000);
+const cdMs = () => ((api.consts.UFO_COOLDOWN_S > 0 ? api.consts.UFO_COOLDOWN_S : 15) * 1000);
 let api = null, THREE = null, scene = null, audio = null, camera = null;
-let racing = false, used = false, idx = 0;
+let racing = false, idx = 0;
 let keysEl = null, caps = [], tintEl = null, readyDom = false;
 let G = null, ufos = [], minis = [], mets = [], sweepT = 0, fxT = 0;
 let T1, T2, T3, UP, Q1;                 // temporales sin allocations por frame
@@ -20,6 +23,8 @@ function buildDom() {
     '.kkc.lit{color:#fff;background:linear-gradient(#7dffb0,#16c26b);-webkit-text-stroke:3px #047857;paint-order:stroke fill;box-shadow:0 10px 0 #0b7a45,0 0 36px 8px rgba(80,255,150,.8);opacity:1;animation:kkPop .28s cubic-bezier(.3,1.8,.5,1)}' +
     '@keyframes kkPop{0%{transform:scale(.6) translateY(14px)}100%{transform:scale(1)}}' +
     '@keyframes kkBad{0%,100%{transform:translate(-50%,-50%)}25%{transform:translate(calc(-50% - 10px),-50%)}75%{transform:translate(calc(-50% + 10px),-50%)}}' +
+    '#kirkHud{position:absolute;left:18px;top:96px;display:flex;align-items:center;gap:8px;pointer-events:none;z-index:2;font:700 clamp(13px,2vw,18px) Fredoka,"Trebuchet MS",sans-serif;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.35);background:rgba(10,60,40,.45);border:3px solid #7dffb0;border-radius:999px;padding:3px 12px 3px 4px}' +
+    '#kirkHud .khr{width:22px;height:22px;border-radius:50%;background:conic-gradient(#7dffb0 0deg,rgba(255,255,255,.25) 0deg);box-shadow:0 0 10px rgba(125,255,176,.7)}' +
     '#alienTint{position:absolute;inset:0;pointer-events:none;z-index:2;opacity:0;background:radial-gradient(circle at 50% 50%,rgba(60,255,140,.10),rgba(20,200,90,.38)),repeating-linear-gradient(0deg,rgba(0,40,20,.22) 0,rgba(0,40,20,.22) 2px,transparent 2px,transparent 5px);mix-blend-mode:screen}' +
     '#alienTint.on{animation:alPulse 1s ease-in-out infinite}@keyframes alPulse{0%,100%{opacity:.35}50%{opacity:.85}}';
   document.head.appendChild(st);
@@ -27,6 +32,20 @@ function buildDom() {
   for (let i = 0; i < 4; i++) { const c = document.createElement('div'); c.className = 'kkc'; c.textContent = CODE[i].toUpperCase(); keysEl.appendChild(c); caps.push(c); }
   api.hudRoot.appendChild(keysEl);
   tintEl = document.createElement('div'); tintEl.id = 'alienTint'; api.hudRoot.appendChild(tintEl);
+  hudEl = document.createElement('div'); hudEl.id = 'kirkHud'; hudEl.style.display = 'none';
+  hudRing = document.createElement('div'); hudRing.className = 'khr'; hudTxt = document.createElement('span');
+  hudEl.append(hudRing, hudTxt); api.hudRoot.appendChild(hudEl);
+}
+function hudUpdate() {
+  if (!hudEl) return;
+  if (!usedOnce) { hudEl.style.display = 'none'; return; }
+  const n = api.now(), left = cdUntil - n, cd = left > 0;
+  const txt = 'KIRK \u00D7' + (usesLeft >= 999 ? '\u221E' : usesLeft) + (cd ? ' ' + Math.ceil(left / 1000) + 's' : '');
+  const deg = cd ? Math.round(360 * (1 - left / cdMs()) / 6) * 6 : 360;
+  const key = txt + deg; if (key === hudLast) return; hudLast = key;
+  hudEl.style.display = 'flex'; hudTxt.textContent = txt;
+  hudRing.style.background = 'conic-gradient(' + (cd ? '#7dffb0 ' + deg + 'deg,rgba(255,255,255,.25) ' + deg + 'deg' : '#7dffb0 360deg,#7dffb0 360deg') + ')';
+  hudEl.style.opacity = usesLeft > 0 ? (cd ? '0.8' : '1') : '0.5';
 }
 function showKeys(n) {
   for (let i = 0; i < 4; i++) { const on = i < n, c = caps[i]; if (on && !c.classList.contains('lit')) { c.classList.remove('lit'); void c.offsetWidth; c.classList.add('lit'); } else if (!on) c.classList.remove('lit'); }
@@ -99,14 +118,16 @@ function activate(m) {
   snd.theremin(); api.shake(0.35);
 }
 function complete() {
-  used = true; snd.done(); setTimeout(() => { if (keysEl) keysEl.classList.remove('on'); }, 700);
+  snd.done(); setTimeout(() => { if (keysEl) keysEl.classList.remove('on'); }, 700);
+  idx = 0; usedOnce = true; usesLeft--; cdUntil = api.now() + cdMs(); hudUpdate();
   if (api.isOnline()) { api.send({ t: 'kirk' }); return; }
   const n = api.now(), me = api.me, R = api.racers;
   activate({ from: me.slot, boostUntil: n + BOOST_MS });
-  for (let i = 0; i < R.length; i++) { const r = R[i]; if (r !== me && !r.dead && n >= (r.airUntil || 0)) r.stunUntil = n + STUN_MS; }
+  for (let i = 0; i < R.length; i++) { const r = R[i]; if (r !== me && !r.dead && n >= (r.airUntil || 0) && n >= (r.giantUntil || 0)) r.stunUntil = n + stunMs(); }
 }
 function onKey(e) {
-  if (!racing || used || e.repeat || !api) return;
+  if (!racing || e.repeat || !api) return;
+  if (usesLeft <= 0 || api.now() < cdUntil) { if (idx) { idx = 0; showKeys(0); } return; }
   if (e.target && e.target.tagName === 'INPUT') return;
   const k = (e.key || '').toLowerCase(); if (k.length !== 1) return;
   if (k === CODE[idx]) { idx++; showKeys(idx); snd.key(idx - 1); if (idx === 4) complete(); }
@@ -165,7 +186,7 @@ function updateMets(dt, t) {
     if (k < 1) continue;
     m.on = false; m.root.visible = false;
     const n = api.now(), pu = o._pu, safe = n < (o.airUntil || 0) || n < (o.giantUntil || 0) || (pu && n < pu.immuneUntil);
-    if (safe) { api.ring(tp.x, tp.z, 0x7dd3fc, 1.2); api.burst(tp.x, 1.5, tp.z, 10, 5, 0xdff6ff, 0.8, 0.6, 8, 4); if (snd.ok()) audio.squeak(0.7, 'release', 1.6); continue; }
+    if (safe) { api.ring(tp.x, tp.z, 0x7dd3fc, 1.2); api.burst(tp.x, 1.5, tp.z, 10, 5, 0xdff6ff, 0.8, 0.6, 8, 4); if (window.DuckPowerups && window.DuckPowerups.ping) window.DuckPowerups.ping(o); else if (snd.ok()) audio.squeak(0.7, 'release', 1.6); continue; }
     api.burst(tp.x, 0.6, tp.z, 26, 8, 0xff7a1a, 0.9, 0.8, 9, 5); api.burst(tp.x, 0.6, tp.z, 14, 6, 0xffe14a, 0.8, 0.7, 9, 4); api.burst(tp.x, 0.5, tp.z, 14, 5, o.color, 0.8, 1.0, 12, 5);
     api.ring(tp.x, tp.z, 0xff7a1a, 1.4);
     if (snd.ok()) { audio.thud(1.1); audio.squeak(0.8, 'squeeze', 1.3); }
@@ -196,8 +217,13 @@ window.DuckUfo = {
     }
     window.addEventListener('keydown', onKey);
   },
-  onRaceStart() { used = false; racing = true; resetAll(); },
-  update, onNet(m) { if (m && m.t === 'ufo') activate(m); },
-  onRaceEnd() { racing = false; resetAll(); },
+  onRaceStart() { racing = true; usesLeft = (api.consts.UFO_PER_RACE | 0) || 3; cdUntil = 0; usedOnce = false; hudLast = ''; resetAll(); hudUpdate(); },
+  update(dt, t) { update(dt, t); if (racing) hudUpdate(); },
+  onNet(m) {
+    if (!m) return;
+    if (m.t === 'ufo') { activate(m); const me = api.me; if (me && m.from === me.slot) { if (typeof m.usesLeft === 'number') usesLeft = m.usesLeft; if (typeof m.cooldownUntil === 'number') cdUntil = m.cooldownUntil; } }
+    else if (m.t === 'kirkNo' || m.t === 'kirkState') { if (typeof m.usesLeft === 'number') usesLeft = m.usesLeft; if (typeof m.cooldownUntil === 'number') cdUntil = m.cooldownUntil; }
+  },
+  onRaceEnd() { racing = false; resetAll(); if (hudEl) hudEl.style.display = 'none'; },
 };
 })();

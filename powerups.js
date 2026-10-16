@@ -593,5 +593,5 @@ function init(a) {
   const sq = audio.squeak; audio.squeak = function (a, b, c) { return sq.call(this, a, b, (c || 1) * (api.me && api.now() < (api.me.giantUntil || 0) ? 0.55 : 1)); };   // voz grave de gigante
   window.addEventListener('mousedown', onMouse);
 }
-window.DuckPowerups = { init, update, onNet, onRaceStart, onRaceEnd, _fireR: fireR, _boxes: () => boxes };
+window.DuckPowerups = { init, update, onNet, onRaceStart, onRaceEnd, _fireR: fireR, ping: showPing, _boxes: () => boxes };
 })();
