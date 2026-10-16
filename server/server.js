@@ -196,9 +196,18 @@ function pickHost() {
   hostId = ids.find(i => !hostBanned.has(i)) ?? ids[0] ?? null;
 }
 function lobbyMsg() {
-  return { t: 'lobby', phase, hostId, shareUrls: shareUrls(), songs: songList(), players: [...players.values()].map(p => ({ id: p.id, nick: p.nick, ready: p.ready, host: p.id === hostId, color: p.color, vote: votes.get(p.id) || null })) };
+  return { t: 'lobby', phase, hostId, deadline: lobbyDeadline || null, serverNow: now(), shareUrls: shareUrls(), songs: songList(), players: [...players.values()].map(p => ({ id: p.id, nick: p.nick, ready: p.ready, host: p.id === hostId, color: p.color, vote: votes.get(p.id) || null })) };
 }
-const sendLobby = () => broadcast(lobbyMsg());
+// Espera máxima del lobby: si en LOBBY_WAIT_S no están todos listos, la carrera arranca igual con todos.
+const LOBBY_WAIT_S = 60;
+let lobbyDeadline = 0, lobbyTimer = null;
+function armLobby() {
+  if (phase !== 'lobby' || players.size === 0) { clearTimeout(lobbyTimer); lobbyTimer = null; lobbyDeadline = 0; return; }
+  if (lobbyDeadline) return;
+  lobbyDeadline = now() + LOBBY_WAIT_S * 1000;
+  lobbyTimer = setTimeout(() => { lobbyTimer = null; maybeStart(true); }, LOBBY_WAIT_S * 1000);
+}
+const sendLobby = () => { armLobby(); broadcast(lobbyMsg()); };
 
 // ---------- validacion de movimiento ----------
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -263,9 +272,10 @@ const kirkLeft = p => kirkInf(p) ? 999 : Math.max(0, C.UFO_PER_RACE - (p.ufoUsed
 function kirkState(p) { return { t: 'kirkState', usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext || 0, serverNow: now() }; }
 
 // ---------- carrera ----------
-function maybeStart() {
+function maybeStart(force) {
   if (phase !== 'lobby' || players.size === 0) return;
-  if (![...players.values()].every(p => p.ready)) return;
+  if (!force && ![...players.values()].every(p => p.ready)) return;
+  clearTimeout(lobbyTimer); lobbyTimer = null; lobbyDeadline = 0;
   const list = [...players.values()];
   const lanes = [0, 1, 2, 3, 4, 5, 6, 7];
   for (let i = lanes.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [lanes[i], lanes[j]] = [lanes[j], lanes[i]]; }

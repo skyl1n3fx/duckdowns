@@ -912,6 +912,13 @@ function renderSongs(){
     b.append(n,c);b.addEventListener('click',()=>send({t:'vote',track:sname===mine?null:sname}));box.appendChild(b);
   }
 }
+// Texto "Faltan N" + cuenta regresiva de la espera máxima del lobby (la decide el servidor).
+function renderNeed(){
+  const need=$('need');if(!net.on||!net.players||!net.players.length){need.textContent='';return;}
+  const left=net.deadline?Math.max(0,Math.ceil((net.deadline-(Date.now()+net.offset))/1000)):0;
+  need.textContent=(net.wait?'Faltan '+net.wait+' por estar listos':'¡Todos listos!')+(left&&net.wait?' · arranca en '+left+' s':'')+' · bots rellenan hasta 8';
+}
+setInterval(()=>{if(game.state==='menu'&&net.on)renderNeed();},500);
 function renderLobby(){
   for(let i=0;i<PALETTE.length;i++){const c=PALETTE[i],b=swBtns[i];b.classList.toggle('sel',c===net.color);b.disabled=net.on&&c!==net.color&&takenByOthers(c);}
   $('start').classList.toggle('live',net.on);renderShare();syncLobbyDucks();
@@ -927,7 +934,7 @@ function renderLobby(){
     const st=document.createElement('span');st.className='st';st.textContent=p.ready?'Listo':'Esperando';
     li.append(dot,nm,st);ul.appendChild(li);
   }
-  need.textContent=net.players.length?(wait?'Faltan '+wait+' por estar listos':'¡Todos listos!')+' · bots rellenan hasta 8':'';
+  net.wait=wait;renderNeed();
   go.textContent=net.ready?'No listo':'¡Listo!';go.classList.toggle('on',net.ready);
 }
 /* sala de espera 3D: un pato por jugador conectado junto a la salida */
@@ -1048,7 +1055,7 @@ function onMsg(m){
       break;
     case 'lobby':
       if(game.online&&m.hostId!==net.hostId)for(const r of racers)if(r.kind==='bot'){r.tp=r.p;r.tpx=r.x;r.tvp=r.vp;r.tvx=r.vx;r.tAge=performance.now();}
-      net.players=m.players;net.hostId=m.hostId;if(Array.isArray(m.songs))net.songs=m.songs;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.phase=m.phase;
+      net.players=m.players;net.hostId=m.hostId;if(Array.isArray(m.songs))net.songs=m.songs;net.deadline=+m.deadline||0;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.phase=m.phase;
       for(const p of m.players)if(p.id===net.id){net.ready=!!p.ready;if(p.color!==undefined&&p.color!==net.color){net.color=p.color;store('duck.color',String(p.color));}}
       if(game.state==='finale'&&game.fin&&game.fin.phase==='podium'&&m.phase==='lobby')goLobby('');
       else if((game.state==='race'||game.state==='countdown')&&m.phase==='lobby')goLobby('La carrera terminó');
