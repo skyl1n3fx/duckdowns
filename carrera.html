@@ -94,7 +94,7 @@ im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})()
 <div id="lookBack" class="hud hide">👀 Mirando atrás</div>
 <div id="start" class="ov">
 <h1>Carrera de Patos de Hule</h1>
-<p>Machaca <b>cualquier tecla</b> lo más rápido que puedas para nadar (mantenerla apretada no cuenta). El <b>mouse</b> mueve tu pato a izquierda y derecha. Esquiva remolinos, ramas, sapos y nenúfares.<br><b>Solo el 1º, 2º y 3º se salvan: a los demás les cae un meteorito.</b></p>
+<p>Machaca la <b>W</b> lo más rápido que puedas para nadar (mantenerla apretada no cuenta). <b>Espacio</b> salta; mantenlo apretado para planear. El <b>mouse</b> mueve tu pato a izquierda y derecha. Esquiva remolinos, ramas, sapos y nenúfares.<br><b>Solo el 1º, 2º y 3º se salvan: a los demás les cae un meteorito.</b></p>
 <div class="lob">
 <div id="sw"></div>
 <input id="nick" maxlength="14" placeholder="Tu nombre" autocomplete="off" spellcheck="false">
@@ -181,6 +181,7 @@ const CFG={
   BOT_MIN:10.8, BOT_MAX:14.2, // velocidad crucero de bots
   BOT_RUBBER:0.12,BOT_CAP:16.3, // BOT_MAX*(1+BOT_RUBBER)+0.6 del servidor menos margen;     // bonus maximo de velocidad de bots rezagados (a 60u del jugador); nunca frenan por ir adelante
   NBOTS:7,
+  HOP_S:1.6,HOP_MIN_S:0.5,HOP_FALL_S:0.3,HOP_CD_S:1.5,   // salto con espacio (los manda el servidor)
   CAM_BACK:8.5, CAM_UP:5.2
 };
 const BOT_COLORS=[0xff5fa8,0x3aa0ff,0x39d96b,0xa96bff,0xff8a2b,0x22d3c5,0xff4d4d];
@@ -536,7 +537,7 @@ const racers=[];
 let player=null;
 function makeRacer(i){
   const color=i===0?0xffd000:BOT_COLORS[i-1],d=createDuck(color);scene.add(d.root);
-  const r={i,name:NAMES[i],color,duck:d,kind:i?'bot':'me',id:-1,bi:i-1,tp:0,tpx:0,tvp:0,tvx:0,tAge:0,stunUntil:0,airUntil:0,boostUntil:0,giantUntil:0,giantScale:1,item:null,wasAir:false,nick:'',slot:i,lab:null,labTxt:'',labMe:false,p:0,x:0,vp:0,vx:0,kick:0,r:0.85,isPlayer:i===0,
+  const r={i,name:NAMES[i],color,duck:d,kind:i?'bot':'me',id:-1,bi:i-1,tp:0,tpx:0,tvp:0,tvx:0,tAge:0,stunUntil:0,airUntil:0,boostUntil:0,giantUntil:0,giantScale:1,hopT0:0,hopUntil:0,hopNext:0,hopPred:0,item:null,wasAir:false,nick:'',slot:i,lab:null,labTxt:'',labMe:false,p:0,x:0,vp:0,vx:0,kick:0,r:0.85,isPlayer:i===0,
     cruise:0,skill:0,phase:Math.random()*6,wob:Math.random()*6,tx:0,seenId:-1,dodgeX:null,
     finished:false,fTime:0,dead:false,stun:0,spin:0,cd:0,dcd:0,inWhirl:false,flap:0,score:0,sx:1};
   return r;
@@ -569,7 +570,7 @@ function resetRace(spec){
     const r=racers[i],sp=spec[i];
     r.p=0;r.vp=0;r.vx=0;r.kick=0;r.finished=false;r.dead=false;r.fTime=0;r.stun=0;r.spin=0;r.cd=0;r.dcd=0;r.inWhirl=false;r.seenId=-1;r.dodgeX=null;r.sx=1;
     r.kind=sp.kind;r.id=sp.id;r.bi=sp.bi;r.isPlayer=sp.kind==='me';r.name=sp.nick;r.color=sp.color;
-    r.slot=sp.lane;r.nick=sp.nick;r.stunUntil=0;r.airUntil=0;r.boostUntil=0;r.giantUntil=0;r.giantScale=1;r.item=null;r.wasAir=false;r.x=((sp.lane-(n-1)/2)/(n-1))*(CFG.HALF_W*1.5);r.tx=r.x;r.score=0;r.tp=0;r.tpx=r.x;r.tvp=0;r.tAge=0;
+    r.slot=sp.lane;r.nick=sp.nick;r.stunUntil=0;r.airUntil=0;r.boostUntil=0;r.giantUntil=0;r.giantScale=1;r.hopT0=r.hopUntil=r.hopNext=r.hopPred=0;r.item=null;r.wasAir=false;r.x=((sp.lane-(n-1)/2)/(n-1))*(CFG.HALF_W*1.5);r.tx=r.x;r.score=0;r.tp=0;r.tpx=r.x;r.tvp=0;r.tAge=0;
     r.duck.root.visible=true;r.duck.root.scale.setScalar(1);r.duck.root.position.set(r.x,0,0);r.duck.root.rotation.set(0,0,0);r.duck.bob.rotation.set(0,0,0);
     recolor(r);setLabel(r);
     if(!r.isPlayer){const q=Math.random();r.cruise=CFG.BOT_MIN+(CFG.BOT_MAX-CFG.BOT_MIN)*q;r.skill=0.72+0.26*Math.random();}
@@ -588,16 +589,38 @@ function onKey(e){
   e.preventDefault();
   if(e.repeat||game.state!=='race'||!player||player.finished||player.dead)return;
   if(Date.now()+(game.online?net.offset:0)<player.stunUntil)return;
-  if(e.key==='Shift'||e.key==='Control'||e.key==='Alt'||e.key==='Meta')return;
+  if(e.code==='Space'){hopPress();return;}
+  if(e.code!=='KeyW'&&e.key!=='w'&&e.key!=='W')return;   // solo la W hace nadar
   const now=performance.now()/1000;
   keyTimes[keyN++&63]=now;
   const f=Math.min(kps/CFG.KPS_FULL,1);
   if(player.stun<=0)player.vp+=CFG.PUSH*(0.8+0.3*f);
   player.flap=1;pressPulse=1;
 }
+// salto con espacio: el servidor valida (cooldown) y relaya 'hop'; online se predice y se cancela si no llega
+function hopOn(r){return NOW<r.hopUntil;}
+function hopPress(){
+  const r=player;if(!r||r.finished||r.dead||game.state!=='race')return;
+  if(NOW<r.hopUntil||NOW<r.hopNext||NOW<r.stunUntil||NOW<r.airUntil)return;
+  r.hopT0=NOW;r.hopUntil=NOW+CFG.HOP_S*1000;r.hopNext=r.hopUntil+CFG.HOP_CD_S*1000;r.hopPred=game.online?NOW:0;
+  if(game.online)send({t:'hop'});
+  audio.squeak(0.6,'release',1.5);
+}
+function hopRelease(){
+  const r=player;if(!r||NOW>=r.hopUntil-CFG.HOP_FALL_S*1000)return;
+  r.hopUntil=Math.max(NOW,r.hopT0+CFG.HOP_MIN_S*1000)+CFG.HOP_FALL_S*1000;r.hopNext=r.hopUntil+CFG.HOP_CD_S*1000;
+  if(game.online)send({t:'land'});
+}
+function hopH(r){   // altura: sube rapido, planea bajando lento, cae en HOP_FALL_S
+  if(NOW>=r.hopUntil)return 0;
+  const e=(NOW-r.hopT0)/1000,left=(r.hopUntil-NOW)/1000,H=1.8;
+  let h=e<0.25?H*Math.sin(e/0.25*Math.PI/2):Math.max(1,H-(e-0.25)*0.5);
+  if(left<CFG.HOP_FALL_S)h*=left/CFG.HOP_FALL_S;
+  return Math.max(0,h);
+}
 function calcKps(now){let c=0;for(let i=0;i<64;i++)if(now-keyTimes[i]<CFG.WINDOW)c++;return c/CFG.WINDOW;}
 addEventListener('keydown',onKey,{passive:false});
-addEventListener('keyup',e=>{if(e.target&&e.target.tagName==='INPUT')return;if(e.key!=='F5'&&e.key!=='F12')e.preventDefault();},{passive:false});
+addEventListener('keyup',e=>{if(e.target&&e.target.tagName==='INPUT')return;if(e.code==='Space')hopRelease();if(e.key!=='F5'&&e.key!=='F12')e.preventDefault();},{passive:false});
 addEventListener('pointermove',e=>{mouseNX=(e.clientX/innerWidth)*2-1;});
 addEventListener('contextmenu',e=>{if(game.state==='race'||game.state==='countdown')e.preventDefault();});
 // mirar hacia atras: mantener click derecho durante la carrera (no dispara power-ups: eso es el click izquierdo)
@@ -720,7 +743,7 @@ function obstacleFx(r,dt,prevP){
 function duckCollisions(){
   const n=racers.length;
   for(let a=0;a<n;a++){const A=racers[a];if(A.dead)continue;
-    for(let b=a+1;b<n;b++){const B=racers[b];if(B.dead||NOW<A.airUntil||NOW<B.airUntil||NOW<A.giantUntil||NOW<B.giantUntil)continue;
+    for(let b=a+1;b<n;b++){const B=racers[b];if(B.dead||NOW<A.airUntil||NOW<B.airUntil||NOW<A.giantUntil||NOW<B.giantUntil||hopOn(A)||hopOn(B))continue;
       const dp=B.p-A.p,dx=B.x-A.x;if(dp>1.9||dp<-1.9||dx>1.9||dx<-1.9)continue;
       const d2=dx*dx+dp*dp,rr=A.r+B.r;
       if(d2>=rr*rr||d2<1e-6)continue;
@@ -1041,7 +1064,7 @@ function applyConsts(c){
   if(ok(c.BOT_MAX)){CFG.BOT_MAX=c.BOT_MAX;CFG.BOT_MIN=c.BOT_MAX-3.4;}
   if(ok(c.BOT_RUBBER))CFG.BOT_RUBBER=c.BOT_RUBBER;
   if(ok(c.BOT_CAP))CFG.BOT_CAP=c.BOT_CAP-0.2;
-  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','UFO_PER_RACE','UFO_COOLDOWN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG'])if(ok(c[k]))CFG[k]=c[k];
+  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','UFO_PER_RACE','UFO_COOLDOWN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG','HOP_S','HOP_MIN_S','HOP_FALL_S','HOP_CD_S'])if(ok(c[k]))CFG[k]=c[k];
   if(rebuild&&game.state==='menu'){worldLen=-1;buildWorld(CFG.LENGTH);resetRace();buildDots();}
 }
 function onMsg(m){
@@ -1074,6 +1097,7 @@ function onMsg(m){
     case 'left':{const r=racerById(m.id);if(r&&game.online){r.dead=true;r.p=-1e3;r.duck.root.visible=false;}break;}
     case 'pong':net.offset=m.serverNow-Date.now();break;
     case 'error':setNet(m.msg||'Error del servidor');break;
+    case 'hop':{const r=racerBySlot(m.slot);if(r){r.hopT0=m.t0;r.hopUntil=m.until;r.hopNext=m.until+CFG.HOP_CD_S*1000;r.hopPred=0;}break;}
     default:if(NETMODS[m.t])modCall('onNet',m);
   }
 }
@@ -1136,6 +1160,11 @@ function updateVisuals(dt,t){
       if(!r.isPlayer)r.flap=Math.min(1,Math.max(0,r.vp/14));else r.flap=Math.max(0,r.flap-dt*4);
       const fl=Math.sin(t*(r.isPlayer?34:16)+r.wob)*0.5*r.flap;
       d.wl.rotation.z=-0.12-Math.abs(fl)*1.1;d.wr.rotation.z=0.12+Math.abs(fl)*1.1;
+      if(r.hopUntil>NOW){
+        if(r.hopPred&&NOW>r.hopPred+400){r.hopPred=0;r.hopUntil=Math.min(r.hopUntil,NOW+CFG.HOP_FALL_S*1000);r.hopNext=0;}   // el servidor no lo concedio
+        const hh=hopH(r);d.bob.position.y+=hh;d.bob.rotation.x+=0.15;
+        if(NOW-r.hopT0>250){const g=1.25+Math.sin(t*5+r.wob)*0.12;d.wl.rotation.z=-g;d.wr.rotation.z=g;}   // planeando: alas abiertas
+      }
       // estela en el agua
       r.wk=(r.wk||0)-dt;
       if(r.wk<=0&&r.vp>2){r.wk=0.07;const s=Math.min(r.vp,14);W(r.p-0.8,r.x+(Math.random()-0.5)*0.8);emit(WX,0.08,WZ,(Math.random()-0.5)*1.2+TRK.tx*s*0.15,0.6,TRK.tz*s*0.15,0xe9fbff,0.45,0.5,1.5);}
@@ -1194,7 +1223,7 @@ function frame(){
   }else if(st==='race'){
     kps=calcKps(now);
     for(let i=0;i<racers.length;i++){const r=racers[i];const pp=r.p;
-      if(isSim(r)){stepRacer(r,dt,t,true);if(NOW>=r.airUntil&&NOW>=r.giantUntil)obstacleFx(r,dt,pp);}else if(!r.dead)interp(r,dt);
+      if(isSim(r)){stepRacer(r,dt,t,true);if(NOW>=r.airUntil&&NOW>=r.giantUntil&&!hopOn(r))obstacleFx(r,dt,pp);}else if(!r.dead)interp(r,dt);
       if(!r.finished&&r.p>=CFG.LENGTH){r.finished=true;r.fTime=t;game.finCount++;
         if(r.isPlayer){msg(game.finCount<=3?'¡'+game.finCount+'º LUGAR!':'¡Llegaste '+game.finCount+'º!');}
         if(game.online)netFinish(r);
