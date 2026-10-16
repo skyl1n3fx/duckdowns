@@ -29,10 +29,18 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#7fd6ff;fon
 #end{display:none;background:none;justify-content:flex-end;padding-bottom:28px;pointer-events:none;z-index:4}
 #end .btn{pointer-events:auto}
 .hide{display:none!important}
+#charlie{position:absolute;top:6%;right:8%;width:clamp(120px,20vw,280px);border-radius:24px;pointer-events:none;z-index:1;opacity:0;animation:charlie 9s ease-in-out infinite}
+@keyframes charlie{0%,25%{opacity:0;transform:scale(.9)}45%,60%{opacity:.4;transform:scale(1)}80%,100%{opacity:0;transform:scale(1.05)}}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<img id="charlie" src="charlie.webp" alt="">
+<script>
+(()=>{const im=document.getElementById('charlie');
+const mv=()=>{im.style.right='auto';im.style.left=Math.random()*Math.max(0,innerWidth-im.offsetWidth)+'px';im.style.top=Math.random()*Math.max(0,innerHeight-im.offsetHeight)+'px';};
+im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})();
+</script>
 <div id="pos" class="hud">1º<small>/8</small></div>
 <div id="kps" class="hud">teclas/seg<b id="kpsv">0.0</b><div id="kbar"><div id="kfill"></div></div></div>
 <div id="prog" class="hud"></div>
