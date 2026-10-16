@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pato de Hule 3D Hiperrealista - Simulador Físico</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        .ui-layer {
+            position: relative;
+            z-index: 10;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .interactive-ui {
+            pointer-events: auto;
+        }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4);
+        }
+        .btn-action {
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .btn-action:hover {
+            transform: translateY(-2px) scale(1.03);
+        }
+        .btn-action:active {
+            transform: translateY(1px) scale(0.95);
+        }
+        .env-active {
+            background: linear-gradient(135deg, #facc15, #eab308) !important;
+            color: #0f172a !important;
+            font-weight: 700;
+            box-shadow: 0 0 15px rgba(250, 204, 21, 0.4);
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.8; }
+            100% { transform: scale(2.2); opacity: 0; }
+        }
+        .squeak-indicator {
+            position: absolute;
+            pointer-events: none;
+            border: 3px solid #facc15;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-left: -20px;
+            margin-top: -20px;
+            animation: pulse-ring 0.6s cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Contenedor 3D -->
+    <div id="canvas-container"></div>
+
+    <!-- Interfaz de Usuario -->
+    <div class="ui-layer p-3 sm:p-6">
+        
+        <!-- Barra Superior: Estadísticas y Controles de Audio -->
+        <div class="flex flex-wrap items-start justify-between gap-3 w-full max-w-6xl mx-auto">
+            
+            <!-- Título y Contadores -->
+            <div class="glass-panel interactive-ui rounded-2xl p-3.5 sm:px-5 sm:py-4 text-white flex items-center gap-4 sm:gap-6">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-yellow-400 flex items-center justify-center text-slate-900 shadow-lg shadow-yellow-400/30 font-extrabold text-xl sm:text-2xl">
+                        🦆
+                    </div>
+                    <div>
+                        <h1 class="font-extrabold text-sm sm:text-lg tracking-tight text-yellow-400 leading-tight">Pato de Hule PBR</h1>
+                        <p class="text-[11px] sm:text-xs text-slate-300">Toca para apretar • Arrastra y suelta</p>
+                    </div>
+                </div>
+
+                <div class="h-8 w-px bg-slate-700"></div>
+
+                <!-- Estadísticas en tiempo real -->
+                <div class="flex gap-4 sm:gap-6 text-xs sm:text-sm">
+                    <div>
+                        <span class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Chillidos</span>
+                        <span id="stat-squeaks" class="font-extrabold text-base sm:text-xl text-white">0</span>
+                    </div>
+                    <div>
+                        <span class="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Fuerza G</span>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                            <div class="w-14 sm:w-20 h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                                <div id="force-bar" class="h-full bg-gradient-to-r from-emerald-400 via-yellow-400 to-rose-500 w-0 transition-all duration-100"></div>
+                            </div>
+                            <span id="stat-force" class="font-mono text-xs text-yellow-300 w-8">0.0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel de Audio y Cámara -->
+            <div class="glass-panel interactive-ui rounded-2xl p-2.5 sm:p-3 text-white flex items-center gap-2 sm:gap-3">
+                <button id="btn-mute" class="btn-action w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-800/90 hover:bg-slate-700 flex items-center justify-center text-yellow-400 border border-slate-700" title="Activar/Silenciar Sonido">
+                    <svg id="icon-sound-on" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+                    <svg id="icon-sound-off" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 hidden text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+                </button>
+                <div class="hidden sm:flex items-center gap-2 pr-2">
+                    <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="0.85" class="w-20 accent-yellow-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg">
+                </div>
+                <button id="btn-reset-cam" class="btn-action px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700" title="Centrar Vista">
+                    Centrar Vista
+                </button>
+            </div>
+        </div>
+
+        <!-- Indicador Central Flotante (Ayuda inicial) -->
+        <div id="hint-banner" class="self-center glass-panel px-4 py-2 rounded-full text-xs sm:text-sm text-yellow-200/90 font-medium tracking-wide pointer-events-none transition-opacity duration-700">
+            ✨ Presiona el pato para hacerlo chillar o lánzalo por los aires
+        </div>
+
+        <!-- Barra Inferior: Acciones Físicas y Selector de Escenario -->
+        <div class="flex flex-col sm:flex-row items-center justify-between gap-3 w-full max-w-5xl mx-auto pb-1">
+            
+            <!-- Botones de Acción Directa -->
+            <div class="glass-panel interactive-ui rounded-2xl p-2 flex items-center gap-2 w-full sm:w-auto justify-center">
+                <button id="btn-squeeze" class="btn-action flex-1 sm:flex-initial px-4 py-2.5 sm:px-5 sm:py-3 rounded-xl bg-gradient-to-r from-yellow-400 to-amber-500 text-slate-950 font-extrabold text-xs sm:text-sm shadow-lg shadow-yellow-500/20 flex items-center justify-center gap-2">
+                    <span>🤏</span> Apretar Fuerte
+                </button>
+                <button id="btn-drop" class="btn-action flex-1 sm:flex-initial px-4 py-2.5 sm:px-5 sm:py-3 rounded-xl bg-gradient-to-r from-sky-400 to-blue-600 text-white font-extrabold text-xs sm:text-sm shadow-lg shadow-sky-500/20 flex items-center justify-center gap-2">
+                    <span>🚀</span> Lanzar de Arriba
+                </button>
+                <button id="btn-spin" class="btn-action px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs sm:text-sm border border-slate-700 flex items-center justify-center gap-1.5" title="Dar un golpe con giro">
+                    <span>🌪️</span> Giro
+                </button>
+            </div>
+
+            <!-- Selector de Superficie / Entorno -->
+            <div class="glass-panel interactive-ui rounded-2xl p-1.5 flex items-center gap-1.5 w-full sm:w-auto justify-center text-xs sm:text-sm">
+                <button data-env="studio" class="env-btn env-active btn-action flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-slate-200 font-medium transition-all">
+                    📸 Estudio
+                </button>
+                <button data-env="water" class="env-btn btn-action flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-slate-200 font-medium transition-all">
+                    🛁 Agua Viva
+                </button>
+                <button data-env="wood" class="env-btn btn-action flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-slate-200 font-medium transition-all">
+                    🪵 Madera
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ============================================================================
+         * 1. SINTETIZADOR DE SONIDO DE PATO DE HULE (WEB AUDIO API)
+         * Genera el sonido de aire comprimido + lengüeta ("squeaker") al apretar
+         * y el sonido de succión/re-inflado al soltar o rebotar.
+         * ============================================================================
+         */
+        class RubberDuckAudio {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+                this.volume = 0.85;
+                this.isSqueaking = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioCtx();
+                }
+                if (this.ctx && this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            /**
+             * Reproduce el característico chillido de juguete de hule ("Squeak")
+             * @param {number} intensity - Fuerza del impacto o apretón (0.1 a 1.5)
+             * @param {string} type - 'squeeze' (apretón), 'release' (re-inflado), 'bounce' (impacto)
+             */
+            playSqueak(intensity = 0.8, type = 'bounce') {
+                if (this.muted) return;
+                this.init();
+                if (!this.ctx) return;
+
+                const now = this.ctx.currentTime;
+                const force = Math.min(Math.max(intensity, 0.15), 1.5);
+
+                // Ganancia Maestra
+                const masterGain = this.ctx.createGain();
+                masterGain.gain.setValueAtTime(0.001, now);
+                masterGain.connect(this.ctx.destination);
+
+                // 1. Oscilador Principal (Lengüeta de plástico vibrando)
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sawtooth';
+
+                // 2. Oscilador Modulador FM (Añade la textura nasal/chillona del caucho)
+                const modOsc = this.ctx.createOscillator();
+                const modGain = this.ctx.createGain();
+                modOsc.type = 'sine';
+                modOsc.frequency.setValueAtTime(38 + force * 25, now);
+                modGain.gain.setValueAtTime(45 * force, now);
+                modOsc.connect(modGain);
+                modGain.connect(osc.frequency);
+
+                // Filtro Paso-Banda resonante (simula la cavidad hueca del pato de hule)
+                const bandpass = this.ctx.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.Q.setValueAtTime(5.5, now);
+
+                // Configuración según tipo de interacción
+                let duration = 0.22;
+                const pitchVariation = (Math.random() - 0.5) * 70;
+
+                if (type === 'squeeze') {
+                    duration = 0.26 + force * 0.14;
+                    const baseFreq = 920 + force * 380 + pitchVariation;
+                    
+                    // Curva de tono característica de un pato de hule al apretar
+                    osc.frequency.setValueAtTime(baseFreq * 0.72, now);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.32, now + 0.055);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.12, now + duration * 0.65);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.62, now + duration);
+
+                    bandpass.frequency.setValueAtTime(baseFreq * 1.5, now);
+                    bandpass.frequency.exponentialRampToValueAtTime(baseFreq * 1.9, now + 0.07);
+
+                    const peakGain = Math.min(force * 0.55, 0.75) * this.volume;
+                    masterGain.gain.linearRampToValueAtTime(peakGain, now + 0.025);
+                    masterGain.gain.exponentialRampToValueAtTime(peakGain * 0.65, now + duration * 0.6);
+                    masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+                } else if (type === 'release') {
+                    // Sonido de aire entrando de vuelta al pato al des-aplastarse
+                    duration = 0.20 + force * 0.12;
+                    const baseFreq = 680 + pitchVariation;
+
+                    osc.frequency.setValueAtTime(baseFreq * 0.65, now);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.18, now + duration * 0.45);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.95, now + duration);
+
+                    bandpass.frequency.setValueAtTime(1100, now);
+
+                    const peakGain = Math.min(force * 0.32, 0.45) * this.volume;
+                    masterGain.gain.linearRampToValueAtTime(peakGain, now + 0.04);
+                    masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+                } else {
+                    // Impacto / Rebote rápido contra el suelo
+                    duration = 0.13 + force * 0.15;
+                    const baseFreq = 1020 + force * 480 + pitchVariation;
+
+                    osc.frequency.setValueAtTime(baseFreq * 0.8, now);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.42, now + 0.035);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.72, now + duration);
+
+                    bandpass.frequency.setValueAtTime(baseFreq * 1.6, now);
+
+                    const peakGain = Math.min(force * 0.65, 0.85) * this.volume;
+                    masterGain.gain.linearRampToValueAtTime(peakGain, now + 0.012);
+                    masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+                    // Golpe sordo del caucho contra el suelo ("thud")
+                    this.playRubberThud(force);
+                }
+
+                // 3. Ruido de Aire (Soplido a través de la válvula del pato)
+                const bufferSize = Math.floor(this.ctx.sampleRate * duration);
+                const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const output = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    output[i] = Math.random() * 2 - 1;
+                }
+                const whiteNoise = this.ctx.createBufferSource();
+                whiteNoise.buffer = noiseBuffer;
+
+                const noiseFilter = this.ctx.createBiquadFilter();
+                noiseFilter.type = 'bandpass';
+                noiseFilter.frequency.setValueAtTime(2400, now);
+                noiseFilter.Q.setValueAtTime(2.5, now);
+
+                const noiseGain = this.ctx.createGain();
+                noiseGain.gain.setValueAtTime(0.18 * force * this.volume, now);
+                noiseGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+                whiteNoise.connect(noiseFilter);
+                noiseFilter.connect(noiseGain);
+                noiseGain.connect(this.ctx.destination);
+
+                // Conexión principal
+                osc.connect(bandpass);
+                bandpass.connect(masterGain);
+
+                osc.start(now);
+                modOsc.start(now);
+                whiteNoise.start(now);
+
+                osc.stop(now + duration);
+                modOsc.stop(now + duration);
+                whiteNoise.stop(now + duration);
+            }
+
+            // Sonido grave de impacto de goma o chapoteo en agua
+            playRubberThud(force, isWater = false) {
+                if (this.muted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+
+                if (isWater) {
+                    // Sonido de chapoteo ("splash")
+                    const dur = 0.25;
+                    const bufSize = Math.floor(this.ctx.sampleRate * dur);
+                    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+                    const data = buf.getChannelData(0);
+                    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.08));
+                    
+                    const src = this.ctx.createBufferSource();
+                    src.buffer = buf;
+                    const filter = this.ctx.createBiquadFilter();
+                    filter.type = 'bandpass';
+                    filter.frequency.setValueAtTime(600, now);
+                    filter.frequency.exponentialRampToValueAtTime(1800, now + dur);
+
+                    const gain = this.ctx.createGain();
+                    gain.gain.setValueAtTime(Math.min(force * 0.4, 0.5) * this.volume, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+                    src.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    src.start(now);
+                    return;
+                }
+
+                const thudOsc = this.ctx.createOscillator();
+                const thudGain = this.ctx.createGain();
+                thudOsc.type = 'sine';
+                thudOsc.frequency.setValueAtTime(135 + force * 40, now);
+                thudOsc.frequency.exponentialRampToValueAtTime(38, now + 0.09);
+
+                thudGain.gain.setValueAtTime(Math.min(force * 0.45, 0.6) * this.volume, now);
+                thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+                thudOsc.connect(thudGain);
+                thudGain.connect(this.ctx.destination);
+                thudOsc.start(now);
+                thudOsc.stop(now + 0.095);
+            }
+        }
+
+        const audio = new RubberDuckAudio();
+
+        /**
+         * ============================================================================
+         * 2. GENERADOR DE TEXTURAS Y HDRI PROCEDURALES (HIPERREALISMO)
+         * Crea el mapa de entorno HDRI de estudio, micro-textura de hule/vinilo,
+         * y texturas de madera sin depender de imágenes externas.
+         * ============================================================================
+         */
+        function createStudioEnvMap(renderer) {
+            const pmremGenerator = new THREE.PMREMGenerator(renderer);
+            pmremGenerator.compileEquirectangularShader();
+
+            const envScene = new THREE.Scene();
+            envScene.background = new THREE.Color(0x1e293b);
+
+            // Softboxes de estudio fotográfico para reflejos especulares hiperrealistas
+            const softboxGeo = new THREE.PlaneGeometry(14, 14);
+            
+            // Luz principal superior cálida
+            const topLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const topBox = new THREE.Mesh(softboxGeo, topLightMat);
+            topBox.position.set(0, 15, 0);
+            topBox.rotation.x = Math.PI / 2;
+            envScene.add(topBox);
+
+            // Softbox lateral izquierdo (Key light intenso)
+            const keyMat = new THREE.MeshBasicMaterial({ color: 0xfffbeb, side: THREE.DoubleSide });
+            const keyBox = new THREE.Mesh(new THREE.PlaneGeometry(12, 18), keyMat);
+            keyBox.position.set(-14, 6, 10);
+            keyBox.lookAt(0, 0, 0);
+            envScene.add(keyBox);
+
+            // Softbox derecho azulado (Rim light)
+            const rimMat = new THREE.MeshBasicMaterial({ color: 0xbae6fd, side: THREE.DoubleSide });
+            const rimBox = new THREE.Mesh(new THREE.PlaneGeometry(12, 16), rimMat);
+            rimBox.position.set(15, 5, -8);
+            rimBox.lookAt(0, 0, 0);
+            envScene.add(rimBox);
+
+            // Tira LED frontal para el brillo en los ojos del pato (Eye catchlight)
+            const catchMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const catchBox = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 16), catchMat);
+            catchBox.position.set(4, 6, 15);
+            envScene.add(catchBox);
+
+            const envRT = pmremGenerator.fromScene(envScene, 0.035);
+            pmremGenerator.dispose();
+            return envRT.texture;
+        }
+
+        // Genera mapa de microrugosidad (bump/roughness) de caucho/hule moldeado
+        function createRubberMicroTexture() {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+
+            const imgData = ctx.createImageData(size, size);
+            const data = imgData.data;
+
+            for (let i = 0; i < data.length; i += 4) {
+                // Ruido fino granulado característico del vinilo moldeado por rotación
+                const grain = 128 + (Math.random() - 0.5) * 38;
+                data[i] = grain;
+                data[i + 1] = grain;
+                data[i + 2] = grain;
+                data[i + 3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+
+            // Suavizado ligero para simular poros de goma
+            ctx.globalAlpha = 0.35;
+            ctx.drawImage(canvas, 1, 1);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(8, 8);
+            return texture;
+        }
+
+        // Genera textura de tablones de madera realista
+        function createWoodTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#5c3a21';
+            ctx.fillRect(0, 0, 1024, 1024);
+
+            // Vetas de madera
+            for (let i = 0; i < 450; i++) {
+                ctx.fillStyle = i % 2 === 0 ? 'rgba(42, 24, 12, 0.14)' : 'rgba(120, 78, 45, 0.12)';
+                const y = Math.random() * 1024;
+                const h = 2 + Math.random() * 12;
+                ctx.fillRect(0, y, 1024, h);
+            }
+
+            // Divisiones de tablones
+            ctx.strokeStyle = 'rgba(25, 14, 6, 0.65)';
+            ctx.lineWidth = 4;
+            const planks = 8;
+            const step = 1024 / planks;
+            for (let i = 0; i <= planks; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * step);
+                ctx.lineTo(1024, i * step);
+                ctx.stroke();
+            }
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(3, 3);
+            return tex;
+        }
+
+        /**
+         * ============================================================================
+         * 3. CONFIGURACIÓN DE ESCENA THREE.JS E ILUMINACIÓN
+         * ============================================================================
+         */
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a);
+        scene.fog = new THREE.FogExp2(0x0f172a, 0.022);
+
+        const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 3.6, 8.8);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.15;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        container.appendChild(renderer.domElement);
+
+        // Asignar HDRI procedural
+        const envMap = createStudioEnvMap(renderer);
+        scene.environment = envMap;
+
+        // Luces
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+        scene.add(ambientLight);
+
+        const mainLight = new THREE.DirectionalLight(0xfffbeb, 1.8);
+        mainLight.position.set(5, 11, 6);
+        mainLight.castShadow = true;
+        mainLight.shadow.mapSize.width = 2048;
+        mainLight.shadow.mapSize.height = 2048;
+        mainLight.shadow.camera.near = 1;
+        mainLight.shadow.camera.far = 25;
+        const d = 7;
+        mainLight.shadow.camera.left = -d;
+        mainLight.shadow.camera.right = d;
+        mainLight.shadow.camera.top = d;
+        mainLight.shadow.camera.bottom = -d;
+        mainLight.shadow.bias = -0.0005;
+        scene.add(mainLight);
+
+        const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.9);
+        rimLight.position.set(-7, 5, -6);
+        scene.add(rimLight);
+
+        const bounceLight = new THREE.PointLight(0xfacc15, 0.5, 10);
+        bounceLight.position.set(0, 0.5, 2);
+        scene.add(bounceLight);
+
+        /**
+         * ============================================================================
+         * 4. CONSTRUCCIÓN DEL PATO DE HULE HIPERREALISTA (MODELADO + PBR + DEFORMACIÓN)
+         * ============================================================================
+         */
+        const rubberBump = createRubberMicroTexture();
+
+        // Material Amarillo Hule Hiperrealista (Con Clearcoat, Subsurface sheen y Micro-textura)
+        const yellowRubberMat = new THREE.MeshPhysicalMaterial({
+            color: 0xffd000,
+            roughness: 0.26,
+            metalness: 0.0,
+            clearcoat: 0.65,
+            clearcoatRoughness: 0.18,
+            reflectivity: 0.85,
+            bumpMap: rubberBump,
+            bumpScale: 0.0045,
+            envMapIntensity: 1.35
+        });
+
+        // Material Naranja Vibrante para el Pico (Pintura vinílica brillante)
+        const orangeBeakMat = new THREE.MeshPhysicalMaterial({
+            color: 0xff5500,
+            roughness: 0.16,
+            metalness: 0.0,
+            clearcoat: 0.9,
+            clearcoatRoughness: 0.1,
+            bumpMap: rubberBump,
+            bumpScale: 0.002,
+            envMapIntensity: 1.5
+        });
+
+        // Material Ojos Pintados (Negro ultra-brillante con reflejo de pupila)
+        const blackEyeMat = new THREE.MeshPhysicalMaterial({
+            color: 0x09090b,
+            roughness: 0.05,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.02,
+            envMapIntensity: 2.0
+        });
+
+        const whiteHighlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+        // Grupo contenedor principal del pato (Física de cuerpo rígido)
+        const duckRoot = new THREE.Group();
+        duckRoot.position.set(0, 2.5, 0);
+        scene.add(duckRoot);
+
+        // Sub-grupo para deformación Squash & Stretch orientada
+        const duckDeformGroup = new THREE.Group();
+        duckRoot.add(duckDeformGroup);
+
+        // Lista de mallas cuyos vértices también se deforman localmente al apretar con el dedo/mouse
+        const deformableMeshes = [];
+
+        function registerDeformableMesh(mesh) {
+            // Clonamos geometría y guardamos las posiciones originales de los vértices
+            mesh.geometry = mesh.geometry.clone();
+            const posAttr = mesh.geometry.attributes.position;
+            const origPositions = new Float32Array(posAttr.array.length);
+            origPositions.set(posAttr.array);
+            mesh.userData.origPositions = origPositions;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            deformableMeshes.push(mesh);
+        }
+
+        // 1. CUERPO ESCULPIDO DEL PATO (Con pecho redondeado, lomo curvo y cola levantada)
+        function createSculptedBodyGeometry() {
+            const geo = new THREE.SphereGeometry(1.15, 64, 64);
+            const pos = geo.attributes.position;
+            const v = new THREE.Vector3();
+
+            for (let i = 0; i < pos.count; i++) {
+                v.fromBufferAttribute(pos, i);
+
+                // Alargar en el eje Z (frente es +Z, cola es -Z)
+                v.z *= 1.28;
+                v.x *= 0.96;
+
+                // Base plana del pato de hule (con el borde redondeado típico del molde)
+                if (v.y < -0.52) {
+                    const flattenFactor = (v.y + 0.52) * 0.18;
+                    v.y = -0.55 + flattenFactor;
+                    // Ensanchar ligeramente la base para estabilidad visual
+                    v.x *= 1.04;
+                }
+
+                // Esculpir la cola levantada y puntiaguda en la parte trasera (-Z)
+                if (v.z < -0.45 && v.y > -0.3) {
+                    const tailFactor = Math.pow((-v.z - 0.45) / 1.0, 1.5);
+                    v.y += tailFactor * 0.55;
+                    v.x *= Math.max(0.25, 1.0 - tailFactor * 0.55);
+                    v.z -= tailFactor * 0.18;
+                }
+
+                // Pecho prominente hacia adelante (+Z)
+                if (v.z > 0.3 && v.y < 0.4) {
+                    const chestFactor = (v.z - 0.3) / 1.2;
+                    v.z += Math.sin(chestFactor * Math.PI * 0.5) * 0.16;
+                }
+
+                // Costura sutil del molde alrededor del pato
+                if (Math.abs(v.x) < 0.025) {
+                    v.y += 0.004;
+                }
+
+                pos.setXYZ(i, v.x, v.y, v.z);
+            }
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        const bodyMesh = new THREE.Mesh(createSculptedBodyGeometry(), yellowRubberMat);
+        bodyMesh.position.set(0, -0.22, -0.1);
+        registerDeformableMesh(bodyMesh);
+        duckDeformGroup.add(bodyMesh);
+
+        // 2. CUELLO SUAVE (Transición orgánica entre cuerpo y cabeza)
+        const neckGeo = new THREE.CylinderGeometry(0.54, 0.72, 0.55, 48, 16);
+        const neckMesh = new THREE.Mesh(neckGeo, yellowRubberMat);
+        neckMesh.position.set(0, 0.52, 0.42);
+        neckMesh.rotation.x = 0.15;
+        registerDeformableMesh(neckMesh);
+        duckDeformGroup.add(neckMesh);
+
+        // 3. CABEZA REDONDEADA CON MEJILLAS DE PATO
+        function createSculptedHeadGeometry() {
+            const geo = new THREE.SphereGeometry(0.76, 64, 64);
+            const pos = geo.attributes.position;
+            const v = new THREE.Vector3();
+
+            for (let i = 0; i < pos.count; i++) {
+                v.fromBufferAttribute(pos, i);
+                v.z *= 1.06;
+                // Mejillas regordetas en la mitad inferior de la cabeza
+                if (v.y < 0.1 && v.y > -0.45 && v.z > 0) {
+                    const cheek = Math.cos((v.y + 0.15) * 3.0) * 0.09;
+                    v.x *= (1 + cheek);
+                }
+                // Frente suave
+                if (v.y > 0.4) {
+                    v.y *= 0.96;
+                }
+                pos.setXYZ(i, v.x, v.y, v.z);
+            }
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        const headMesh = new THREE.Mesh(createSculptedHeadGeometry(), yellowRubberMat);
+        headMesh.position.set(0, 1.02, 0.48);
+        registerDeformableMesh(headMesh);
+        duckDeformGroup.add(headMesh);
+
+        // 4. PICO NARANJA ESCULPIDO (Labio superior curvado con sonrisa y labio inferior)
+        function createSculptedBeakGeometry() {
+            const geo = new THREE.SphereGeometry(0.42, 48, 48);
+            const pos = geo.attributes.position;
+            const v = new THREE.Vector3();
+
+            for (let i = 0; i < pos.count; i++) {
+                v.fromBufferAttribute(pos, i);
+                v.x *= 1.25; // Ancho del pico
+                v.y *= 0.42; // Achatado verticalmente
+                v.z *= 1.35; // Largo hacia adelante
+
+                // Curva de sonrisa en los bordes laterales del pico
+                const sideDist = Math.abs(v.x) / 0.52;
+                v.y += Math.pow(sideDist, 2.0) * 0.11;
+
+                // Punta delantera ligeramente elevada
+                if (v.z > 0.25) {
+                    v.y += (v.z - 0.25) * 0.18;
+                }
+
+                pos.setXYZ(i, v.x, v.y, v.z);
+            }
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        const upperBeak = new THREE.Mesh(createSculptedBeakGeometry(), orangeBeakMat);
+        upperBeak.position.set(0, 0.94, 1.18);
+        registerDeformableMesh(upperBeak);
+        duckDeformGroup.add(upperBeak);
+
+        const lowerBeakGeo = createSculptedBeakGeometry();
+        lowerBeakGeo.scale(0.86, 0.72, 0.85);
+        const lowerBeak = new THREE.Mesh(lowerBeakGeo, orangeBeakMat);
+        lowerBeak.position.set(0, 0.84, 1.12);
+        lowerBeak.rotation.x = 0.12;
+        registerDeformableMesh(lowerBeak);
+        duckDeformGroup.add(lowerBeak);
+
+        // 5. ALAS LATERALES EN RELIEVE (Típicas del pato de hule clásico)
+        function createWingGeometry(isLeft) {
+            const geo = new THREE.SphereGeometry(0.62, 48, 48);
+            const pos = geo.attributes.position;
+            const v = new THREE.Vector3();
+            const dir = isLeft ? 1 : -1;
+
+            for (let i = 0; i < pos.count; i++) {
+                v.fromBufferAttribute(pos, i);
+                v.x *= 0.26;
+                v.y *= 0.68;
+                v.z *= 1.25;
+
+                // Curvar el ala para abrazar el cuerpo del pato
+                const zNorm = v.z / 0.75;
+                v.x -= Math.pow(zNorm, 2) * 0.12 * dir;
+
+                // Punta del ala trasera elevada
+                if (v.z < -0.15) {
+                    v.y += (-v.z - 0.15) * 0.35;
+                    v.y *= Math.max(0.3, 1.0 - (-v.z - 0.15) * 0.45);
+                }
+
+                // Surcos de las plumas moldeadas en goma
+                if (v.x * dir > 0 && v.z < 0.2) {
+                    const featherWave = Math.sin(v.y * 16.0) * 0.022;
+                    v.x += featherWave * dir;
+                }
+
+                pos.setXYZ(i, v.x, v.y, v.z);
+            }
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        const leftWing = new THREE.Mesh(createWingGeometry(true), yellowRubberMat);
+        leftWing.position.set(0.95, -0.08, -0.14);
+        leftWing.rotation.y = 0.14;
+        leftWing.rotation.z = -0.12;
+        registerDeformableMesh(leftWing);
+        duckDeformGroup.add(leftWing);
+
+        const rightWing = new THREE.Mesh(createWingGeometry(false), yellowRubberMat);
+        rightWing.position.set(-0.95, -0.08, -0.14);
+        rightWing.rotation.y = -0.14;
+        rightWing.rotation.z = 0.12;
+        registerDeformableMesh(rightWing);
+        duckDeformGroup.add(rightWing);
+
+        // 6. OJOS NEGROS BRILLANTES CON PUPILA Y DESTELLO
+        function createEyeGroup(side) {
+            const eyeGroup = new THREE.Group();
+            const eyeGeo = new THREE.SphereGeometry(0.125, 32, 32);
+            eyeGeo.scale(0.85, 1.08, 0.65);
+            const eyeMesh = new THREE.Mesh(eyeGeo, blackEyeMat);
+            eyeGroup.add(eyeMesh);
+
+            // Brillo blanco pintado clásico
+            const dotGeo = new THREE.SphereGeometry(0.032, 16, 16);
+            const dotMesh = new THREE.Mesh(dotGeo, whiteHighlightMat);
+            dotMesh.position.set(side * 0.03, 0.045, 0.075);
+            eyeGroup.add(dotMesh);
+
+            eyeGroup.position.set(side * 0.34, 1.15, 1.08);
+            eyeGroup.rotation.y = side * 0.38;
+            eyeGroup.rotation.x = -0.12;
+            return eyeGroup;
+        }
+
+        const leftEye = createEyeGroup(1);
+        const rightEye = createEyeGroup(-1);
+        duckDeformGroup.add(leftEye);
+        duckDeformGroup.add(rightEye);
+
+        // 7. VÁLVULA INFERIOR DE SILBATO ("Squeaker hole" debajo del pato)
+        const valveGeo = new THREE.RingGeometry(0.06, 0.15, 32);
+        const valveMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, side: THREE.DoubleSide });
+        const valveMesh = new THREE.Mesh(valveGeo, valveMat);
+        valveMesh.position.set(0, -0.765, -0.05);
+        valveMesh.rotation.x = Math.PI / 2;
+        duckDeformGroup.add(valveMesh);
+
+        /**
+         * ============================================================================
+         * 5. ESCENARIOS INTERACTIVOS (ESTUDIO, AGUA DE BAÑERA CON ONDAS, MADERA)
+         * ============================================================================
+         */
+        const FLOOR_Y = 0;
+        const DUCK_BASE_OFFSET = 0.77; // Distancia del centro del grupo a la panza plana del pato
+        let currentEnv = 'studio';
+
+        // Suelo principal
+        const floorGeo = new THREE.PlaneGeometry(36, 36, 96, 96);
+        floorGeo.rotateX(-Math.PI / 2);
+        const floorOrigPos = new Float32Array(floorGeo.attributes.position.array.length);
+        floorOrigPos.set(floorGeo.attributes.position.array);
+
+        const studioFloorMat = new THREE.MeshPhysicalMaterial({
+            color: 0x1e293b,
+            roughness: 0.32,
+            metalness: 0.05,
+            clearcoat: 0.25,
+            clearcoatRoughness: 0.4
+        });
+
+        const waterFloorMat = new THREE.MeshPhysicalMaterial({
+            color: 0x0284c7,
+            roughness: 0.08,
+            metalness: 0.05,
+            transmission: 0.65,
+            transparent: true,
+            opacity: 0.88,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.05,
+            envMapIntensity: 1.8
+        });
+
+        const woodTex = createWoodTexture();
+        const woodFloorMat = new THREE.MeshPhysicalMaterial({
+            map: woodTex,
+            roughness: 0.38,
+            clearcoat: 0.45,
+            clearcoatRoughness: 0.25,
+            bumpMap: woodTex,
+            bumpScale: 0.015
+        });
+
+        const floorMesh = new THREE.Mesh(floorGeo, studioFloorMat);
+        floorMesh.receiveShadow = true;
+        scene.add(floorMesh);
+
+        // Fondo de azulejos debajo del agua cuando está en modo bañera
+        const poolBottomGeo = new THREE.PlaneGeometry(36, 36);
+        poolBottomGeo.rotateX(-Math.PI / 2);
+        const poolBottomMat = new THREE.MeshStandardMaterial({ color: 0x0c4a6e, roughness: 0.8 });
+        const poolBottomMesh = new THREE.Mesh(poolBottomGeo, poolBottomMat);
+        poolBottomMesh.position.y = -0.8;
+        poolBottomMesh.visible = false;
+        scene.add(poolBottomMesh);
+
+        // Ondas en el agua
+        const waterRipples = [];
+        function spawnWaterRipple(x, z, strength) {
+            waterRipples.push({ x, z, radius: 0.1, strength: Math.min(strength, 1.5), age: 0 });
+            if (waterRipples.length > 12) waterRipples.shift();
+        }
+
+        function setEnvironment(envName) {
+            currentEnv = envName;
+            // Resetear vértices del suelo
+            const pos = floorGeo.attributes.position;
+            pos.array.set(floorOrigPos);
+            pos.needsUpdate = true;
+            floorGeo.computeVertexNormals();
+
+            if (envName === 'studio') {
+                floorMesh.material = studioFloorMat;
+                poolBottomMesh.visible = false;
+                scene.background.setHex(0x0f172a);
+                scene.fog.color.setHex(0x0f172a);
+            } else if (envName === 'water') {
+                floorMesh.material = waterFloorMat;
+                poolBottomMesh.visible = true;
+                scene.background.setHex(0x082f49);
+                scene.fog.color.setHex(0x082f49);
+                spawnWaterRipple(duckRoot.position.x, duckRoot.position.z, 0.8);
+                audio.playRubberThud(0.6, true);
+            } else if (envName === 'wood') {
+                floorMesh.material = woodFloorMat;
+                poolBottomMesh.visible = false;
+                scene.background.setHex(0x1c1917);
+                scene.fog.color.setHex(0x1c1917);
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 6. MOTOR DE FÍSICA: CUERPO RÍGIDO + CUERPO BLANDO (SQUISH & BOUNCE)
+         * ============================================================================
+         */
+        const physics = {
+            velocity: new THREE.Vector3(0, 0, 0),
+            angularVel: new THREE.Vector3(0.4, 0.8, -0.2),
+            gravity: -24.0,
+            restitution: 0.66, // Rebote elástico de hule
+            boundsX: 4.5,
+            boundsZ: 3.8,
+
+            // Estado de deformación elástica (Oscilador armónico amortiguado con conservación de volumen)
+            squashY: 1.0,
+            squashVel: 0.0,
+            targetSquashY: 1.0,
+            springStiffness: 290.0,
+            springDamping: 11.5,
+
+            // Deformación localizada de vértices donde el usuario presiona con el dedo/cursor
+            pokePointLocal: new THREE.Vector3(0, 0, 0),
+            pokeStrength: 0.0,
+            targetPokeStrength: 0.0,
+
+            // Interacción
+            isDragging: false,
+            isPressingDuck: false,
+            dragStartTime: 0,
+            lastPointerWorldPos: new THREE.Vector3(),
+            pointerVelocity: new THREE.Vector3(),
+            squeakCount: 0,
+            maxGForceDisplay: 0
+        };
+
+        const uiSqueaks = document.getElementById('stat-squeaks');
+        const uiForce = document.getElementById('stat-force');
+        const uiForceBar = document.getElementById('force-bar');
+        const hintBanner = document.getElementById('hint-banner');
+
+        function registerSqueakEvent(intensity, screenPos = null) {
+            physics.squeakCount++;
+            uiSqueaks.textContent = physics.squeakCount;
+
+            // Mostrar Fuerza G en la UI
+            const gForce = (intensity * 4.2).toFixed(1);
+            physics.maxGForceDisplay = Math.max(physics.maxGForceDisplay, parseFloat(gForce));
+            uiForce.textContent = gForce + 'G';
+            const barPercent = Math.min(100, (intensity / 1.4) * 100);
+            uiForceBar.style.width = barPercent + '%';
+
+            // Ocultar banner de ayuda tras primera interacción
+            if (hintBanner) hintBanner.style.opacity = '0';
+
+            // Efecto visual de onda sonora donde está el pato
+            if (screenPos) {
+                createVisualRipple(screenPos.x, screenPos.y);
+            } else {
+                const proj = duckRoot.position.clone().project(camera);
+                const sx = (proj.x * 0.5 + 0.5) * window.innerWidth;
+                const sy = (-(proj.y * 0.5) + 0.5) * window.innerHeight;
+                createVisualRipple(sx, sy);
+            }
+        }
+
+        function createVisualRipple(x, y) {
+            const ring = document.createElement('div');
+            ring.className = 'squeak-indicator';
+            ring.style.left = `${x}px`;
+            ring.style.top = `${y}px`;
+            document.body.appendChild(ring);
+            setTimeout(() => ring.remove(), 600);
+        }
+
+        /**
+         * Aplica deformación por vértices a las mallas del pato cuando el usuario lo presiona
+         * o cuando sufre una compresión fuerte contra el suelo.
+         */
+        function updateSoftBodyVertices() {
+            const pStrength = physics.pokeStrength;
+            const globalSquish = 1.0 - physics.squashY; // > 0 cuando está aplastado
+
+            // Si no hay deformación apreciable, restaurar rápido
+            if (Math.abs(pStrength) < 0.002 && Math.abs(globalSquish) < 0.002) {
+                return;
+            }
+
+            const pokeLocal = physics.pokePointLocal;
+            const tempV = new THREE.Vector3();
+
+            for (let m = 0; m < deformableMeshes.length; m++) {
+                const mesh = deformableMeshes[m];
+                const posAttr = mesh.geometry.attributes.position;
+                const orig = mesh.userData.origPositions;
+
+                for (let i = 0; i < posAttr.count; i++) {
+                    const ix = i * 3;
+                    tempV.set(orig[ix], orig[ix + 1], orig[ix + 2]);
+
+                    // Convertir coordenada local de la sub-malla al espacio de duckDeformGroup
+                    const worldInDuck = tempV.clone().applyEuler(mesh.rotation).add(mesh.position);
+
+                    // 1. Hundimiento local por presión directa del dedo/cursor (Gaussian dent + abombamiento lateral)
+                    if (pStrength > 0.005) {
+                        const dist = worldInDuck.distanceTo(pokeLocal);
+                        const radius = 0.95;
+                        if (dist < radius) {
+                            const falloff = Math.cos((dist / radius) * (Math.PI * 0.5));
+                            const indent = falloff * falloff * pStrength * 0.34;
+                            // Hundir hacia el centro del pato
+                            tempV.multiplyScalar(1.0 - indent);
+                        } else if (dist < radius * 1.6) {
+                            // Conservación de volumen en el hule: se hincha alrededor del dedo
+                            const bulge = Math.sin(((dist - radius) / (radius * 0.6)) * Math.PI) * pStrength * 0.065;
+                            tempV.x *= (1.0 + bulge);
+                            tempV.z *= (1.0 + bulge);
+                        }
+                    }
+
+                    // 2. Aplastamiento plano de la panza al chocar contra el suelo
+                    if (globalSquish > 0.01 && worldInDuck.y < -0.25) {
+                        const bellyFactor = Math.min(1.0, (-0.25 - worldInDuck.y) / 0.6);
+                        tempV.x *= (1.0 + globalSquish * bellyFactor * 0.35);
+                        tempV.z *= (1.0 + globalSquish * bellyFactor * 0.35);
+                    }
+
+                    posAttr.setXYZ(i, tempV.x, tempV.y, tempV.z);
+                }
+                posAttr.needsUpdate = true;
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 7. CONTROLES INTERACTIVOS MULTIPLATAFORMA (POINTER EVENTS: MOUSE + TOUCH)
+         * ============================================================================
+         */
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2();
+        const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        const intersectPoint = new THREE.Vector3();
+        const dragOffset = new THREE.Vector3();
+
+        // Variables para rotación de cámara orbital cuando se arrastra fuera del pato
+        let isOrbiting = false;
+        let prevPointerScreen = { x: 0, y: 0 };
+        let camSpherical = { theta: 0, phi: 1.18, radius: 9.4 };
+        const camTarget = new THREE.Vector3(0, 1.0, 0);
+
+        function updateCameraPosition() {
+            camSpherical.phi = Math.max(0.28, Math.min(Math.PI * 0.47, camSpherical.phi));
+            camSpherical.radius = Math.max(4.5, Math.min(15.0, camSpherical.radius));
+
+            camera.position.x = camTarget.x + camSpherical.radius * Math.sin(camSpherical.phi) * Math.sin(camSpherical.theta);
+            camera.position.y = camTarget.y + camSpherical.radius * Math.cos(camSpherical.phi);
+            camera.position.z = camTarget.z + camSpherical.radius * Math.sin(camSpherical.phi) * Math.cos(camSpherical.theta);
+            camera.lookAt(camTarget);
+        }
+        updateCameraPosition();
+
+        function updatePoint... (Tiempo restante: 20 KB)
