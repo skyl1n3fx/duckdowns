@@ -1,0 +1,88 @@
+duckdowns escuchando en :8091
+host 10 degradado por bots imposibles
+host 11 degradado por bots imposibles
+host 14 degradado por bots imposibles
+host 15 degradado por bots imposibles
+host 18 degradado por bots imposibles
+host 19 degradado por bots imposibles
+host 19 degradado por bots imposibles
+host 18 degradado por bots imposibles
+duckdowns escuchando en :8091
+host 3 degradado por bots imposibles
+host 4 degradado por bots imposibles
+host 9 degradado por bots imposibles
+host 10 degradado por bots imposibles
+host 9 degradado por bots imposibles
+host 11 degradado por bots imposibles
+host 12 degradado por bots imposibles
+host 13 degradado por bots imposibles
+host 16 degradado por bots imposibles
+host 17 degradado por bots imposibles
+host 17 degradado por bots imposibles
+host 19 degradado por bots imposibles
+host 20 degradado por bots imposibles
+node:events:502
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::8091
+    at Server.setupListenHandle [as _listen2] (node:net:1908:16)
+    at listenInCluster (node:net:1965:12)
+    at Server.listen (node:net:2067:7)
+    at Object.<anonymous> (/home/x4leqxinn/Desktop/Projects/duckdowns/server/server.js:828:8)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:524:28)
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+  code: 'EADDRINUSE',
+  errno: -98,
+  syscall: 'listen',
+  address: '::',
+  port: 8091
+}
+
+Node.js v20.20.2
+host 35 degradado por bots imposibles
+host 36 degradado por bots imposibles
+node:events:502
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::8091
+    at Server.setupListenHandle [as _listen2] (node:net:1908:16)
+    at listenInCluster (node:net:1965:12)
+    at Server.listen (node:net:2067:7)
+    at Object.<anonymous> (/home/x4leqxinn/Desktop/Projects/duckdowns/server/server.js:833:8)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:524:28)
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+  code: 'EADDRINUSE',
+  errno: -98,
+  syscall: 'listen',
+  address: '::',
+  port: 8091
+}
+
+Node.js v20.20.2
+host 39 degradado por bots imposibles
+host 40 degradado por bots imposibles
+host 43 degradado por bots imposibles
+host 44 degradado por bots imposibles
+host 48 degradado por bots imposibles
+host 49 degradado por bots imposibles
+duckdowns escuchando en :8091
+host 4 degradado por bots imposibles
+host 5 degradado por bots imposibles
