@@ -88,6 +88,9 @@ const STATIC = {
   '/rampas.js': 'text/javascript; charset=utf-8',
   '/ovni.js': 'text/javascript; charset=utf-8',
   '/cangri.webp': 'image/webp',
+  '/cangri1.webp': 'image/webp',
+  '/cangri2.webp': 'image/webp',
+  '/cangri3.webp': 'image/webp',
 };
 const server = http.createServer((req, res) => {
   let p;

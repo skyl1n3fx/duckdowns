@@ -209,7 +209,7 @@ function resetAll() {
 const CCODE = 'cangri', C_FLASH_MS = 1500, C_STUN_MS = 1000;
 let cIdx = 0, cUses = 2, cCdUntil = 0, cUsedOnce = false, cKeysEl = null, cCaps = [], cHud = null, cHudTxt = null, cHudRing = null, cHudLast = '';
 let cSfx = null, cSfxOk = true;
-let cFlash = null, cFlashT = 0, cSprite = null, cSpriteT = 0, cSpriteOwner = null, cImg = null;
+let cSeq = 0, cFlash = null, cFlashT = 0, cSprite = null, cSpriteT = 0, cSpriteOwner = null, cImg = null;
 const cCdMs = () => ((api.consts.CANGRI_COOLDOWN_S > 0 ? api.consts.CANGRI_COOLDOWN_S : 15) * 1000);
 function buildCangriDom() {
   const st = document.createElement('style');
@@ -230,8 +230,8 @@ function buildCangriDom() {
   cHud = document.createElement('div'); cHud.id = 'cangriHud'; cHud.style.display = 'none';
   cHudRing = document.createElement('div'); cHudRing.className = 'khr'; cHudTxt = document.createElement('span'); cHud.append(cHudRing, cHudTxt); api.hudRoot.appendChild(cHud);
   try { cSfx = new Audio('sfx/cangri.mp3'); cSfx.preload = 'auto'; cSfx.volume = 0.6; cSfx.addEventListener('error', () => { cSfxOk = false; }); } catch (e) { cSfx = null; cSfxOk = false; }
-  cImg = new Image(); cImg.src = 'cangri.webp';           // precarga
-  cFlash = document.createElement('img'); cFlash.id = 'cangriFlash'; cFlash.alt = ''; cFlash.src = 'cangri.webp'; api.hudRoot.appendChild(cFlash);
+  cImg = ['cangri1.webp', 'cangri2.webp', 'cangri3.webp'].map(u => { const im = new Image(); im.src = u; return im; });   // precarga de la secuencia
+  cFlash = document.createElement('img'); cFlash.id = 'cangriFlash'; cFlash.alt = ''; cFlash.src = 'cangri1.webp'; api.hudRoot.appendChild(cFlash);
   const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160; const c = cv.getContext('2d');
   c.font = '900 104px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineWidth = 16; c.lineJoin = 'round';
   c.strokeStyle = '#7a4a00'; c.strokeText('¡CANGRI!', 256, 84); c.fillStyle = '#ffd45a'; c.fillText('¡CANGRI!', 256, 84);
@@ -263,8 +263,12 @@ function cApply(m) {
   const played = cPlay();   // llega cangri{from,flashMs}: el autor ve un cartel sobre su pato; los demas, foto y temblor
   const me = api.me, au = bySlot(m.from);
   if (me && m.from === me.slot) { cSpriteOwner = au; cSpriteT = 1.3; if (!played && snd.ok()) audio.squeak(1, 'squeeze', 1.6); return; }
-  const ms = m.flashMs > 0 ? m.flashMs : C_FLASH_MS;
-  cFlash.style.animationDuration = (ms / 1000) + 's'; cFlash.classList.remove('go'); void cFlash.offsetWidth; cFlash.classList.add('go'); cFlashT = ms / 1000;
+  // la secuencia dura lo mismo que el audio de cangri (~5 s); si no cargo, 5040 ms
+  const ms = cSfx && cSfx.duration > 0 && isFinite(cSfx.duration) ? cSfx.duration * 1000 : 5040;
+  // secuencia cangri1 -> cangri2 -> cangri3, cada una con su zoom con rebote (el total sigue siendo ms)
+  const seq = ++cSeq, part = ms / 3;
+  const show = i => { if (seq !== cSeq) return; cFlash.src = cImg[i].src; cFlash.style.animationDuration = (part / 1000) + 's'; cFlash.classList.remove('go'); void cFlash.offsetWidth; cFlash.classList.add('go'); };
+  show(0); setTimeout(() => show(1), part); setTimeout(() => show(2), part * 2); cFlashT = ms / 1000;
   api.shake(1.4); if (!played && snd.ok()) { audio.boom(); audio.squeak(1.2, 'squeeze', 1.9); }
   cSpriteOwner = au; cSpriteT = 1.3;
 }
