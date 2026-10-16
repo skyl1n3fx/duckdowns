@@ -747,7 +747,7 @@ function rankOf(r){let k=1;const s=scoreOf(r);for(let i=0;i<racers.length;i++)if
 
 // Música opcional: si hay un musica.mp3 local junto al HTML, suena en loop (no se versiona).
 // Con servidor: GET /musica.json (lista de mp3) y /musica/<nombre>; si falla o viene vacio, musica.mp3 local; si no existe, silencio.
-const mus={list:null,a:[new Audio(),new Audio()],cur:0,last:'',started:false,mode:'lobby',fade:0,vol:[0,0],target:0.18,fb:false};
+const mus={list:null,a:[new Audio(),new Audio()],cur:0,last:'',started:false,mode:'lobby',fade:0,vol:[0,0],target:0.4,fb:false};
 for(const el of mus.a){el.loop=true;el.preload='auto';el.addEventListener('error',()=>{if(el.src&&!mus.fb&&el===mus.a[mus.cur]){mus.fb=true;musPlay('musica.mp3');}});}
 (function(){
   const done=l=>{mus.list=Array.isArray(l)?l.filter(x=>typeof x==='string'&&/\.mp3$/i.test(x)):[];if(!mus.list.length)mus.list=null;if(mus.started)musMode(mus.mode,true);};
@@ -768,7 +768,7 @@ function musPlay(url){
 }
 function musMode(mode,force){
   if(mode===mus.mode&&!force&&mus.started)return;
-  mus.mode=mode;mus.target=mode==='race'?0.45:0.18;mus.fb=false;
+  mus.mode=mode;mus.target=mode==='race'?0.75:0.4;mus.fb=false;
   if(mus.started)musPlay(musPick());
 }
 function musTick(dt){ // fundido cruzado
@@ -777,7 +777,7 @@ function musTick(dt){ // fundido cruzado
   mus.fade=Math.max(0,mus.fade-dt);
   if(n.volume<mus.target)n.volume=Math.min(mus.target,n.volume+mus.target*k);
   else if(n.volume>mus.target)n.volume=mus.target;
-  if(o.volume>0){o.volume=Math.max(0,o.volume-0.45*k);if(o.volume===0)o.pause();}
+  if(o.volume>0){o.volume=Math.max(0,o.volume-0.75*k);if(o.volume===0)o.pause();}
   n.muted=o.muted=!!audio.muted;
 }
 function musStart(){if(mus.started)return;mus.started=true;musPlay(musPick());}
