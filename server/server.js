@@ -30,8 +30,9 @@ const C = {
   DONUT_R_X: 3, DONUT_R_P: 1.5, DONUT_BLIND_S: 3, DONUT_SPLASH_R: 10, DONUT_SPLASH_S: 1.5, DONUT_ARM_S: 1.5,
   DONUT_TTL_S: Math.min(600, Math.max(1, Number(process.env.DUCK_DONUT_TTL) || 60)),     // DUCK_DONUT_* solo para tests
   DONUT_MAX: Math.min(6, Math.max(1, Number(process.env.DUCK_DONUT_MAX) || 6)),
-  GIANT_S: 8, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 3, UFO_PER_RACE: 3,
+  GIANT_S: 4, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 3, UFO_PER_RACE: 3,
   UFO_COOLDOWN_S: Math.min(60, Math.max(0, Number(process.env.DUCK_UFO_CD ?? 15))),   // DUCK_UFO_CD solo para tests
+  HOP_S: 1.6, HOP_MIN_S: 0.5, HOP_FALL_S: 0.3, HOP_CD_S: 1.5,   // salto con espacio: aire maximo (planeando), minimo, caida, cooldown
   JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
 };
 C.BOT_CAP = C.BOT_MAX * (1 + C.BOT_RUBBER) + 0.6;   // tope de bots incl. rubber-band
@@ -44,7 +45,7 @@ const MAX_VX = 30;
 const HOST_STRIKES = 40;            // recortes de bots antes de quitar el rol de host
 const BOT_STALE_MS = 600;           // sin datos del host: el servidor avanza el bot
 // ---- power-ups ----
-const BOX_RESPAWN_MS = 6000, BOX_DP = 2.5, BOX_DX = 2;
+const BOX_RESPAWN_MS = 6000, BOX_DP = 3.2, BOX_DX = 2.6;   // algo mas holgado que el cliente (2.5/2): la posicion validada llega con retraso
 const STUN_MS = 2000, IMMUNE_MS = 1000, STUN_DRIFT = 0.5;   // deriva maxima aturdido (u/s)
 const ACT_GAP_MS = 150;                                     // pickup/fire: 1 cada 150 ms por pato
 function mulberry32(a) { return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -466,6 +467,22 @@ function onMessage(p, m) {
       send(p.ws, cangriState(p));
       return;
     }
+    case 'hop': {       // salto con espacio (mantener = planear). Sin impulso ni inmunidad: solo se valida cooldown y se relaya
+      if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
+      const mv = p.mv, tn = now();
+      if (tn < (mv.hopUntil || 0) || tn < (mv.hopNext || 0) || tn < (mv.stunUntil || 0) || tn < (mv.airUntil || 0)) return;
+      mv.hopT0 = tn; mv.hopUntil = tn + C.HOP_S * 1000; mv.hopNext = mv.hopUntil + C.HOP_CD_S * 1000;
+      broadcast({ t: 'hop', slot: p.slot, id: p.id, t0: tn, until: mv.hopUntil, serverNow: tn });
+      return;
+    }
+    case 'land': {      // solto el espacio: deja de planear y cae (respetando el aire minimo)
+      if (!race || !p.inRace || !p.mv) return;
+      const mv = p.mv, tn = now();
+      if (tn >= (mv.hopUntil || 0) - C.HOP_FALL_S * 1000) return;
+      mv.hopUntil = Math.max(tn, mv.hopT0 + C.HOP_MIN_S * 1000) + C.HOP_FALL_S * 1000; mv.hopNext = mv.hopUntil + C.HOP_CD_S * 1000;
+      broadcast({ t: 'hop', slot: p.slot, id: p.id, t0: mv.hopT0, until: mv.hopUntil, serverNow: tn });
+      return;
+    }
     case 'pickup': onPickup(p, m); return;
     case 'fire': onFire(p, m); return;
     case 'event': {
@@ -502,8 +519,9 @@ function actOk(slot) {                      // 1 accion cada ACT_GAP_MS por pato
   if (n - l < ACT_GAP_MS) return false;
   race.lastAct.set(slot, n); return true;
 }
-function sendItem(a, kind) {
+function sendItem(a, kind, again) {   // again: resincroniza un item que el cliente creyo gastado
   const msg = { t: 'item', slot: a.slot, kind };
+  if (again) msg.again = 1;
   const to = a.bot ? players.get(effectiveHost()) : a.p;
   if (to) send(to.ws, msg);
 }
@@ -511,8 +529,9 @@ function onPickup(p, m) {
   const a = actorOf(p, m);
   if (!a || !Number.isInteger(m.box) || !actOk(a.slot)) return;
   const b = race.boxes[m.box];
-  if (!b || !b.active || getItem(a)) return;
+  if (!b || !b.active) return;
   if (Math.abs(a.mv.p - b.p) >= BOX_DP || Math.abs(a.mv.x - b.x) >= BOX_DX) return;   // posicion validada por el servidor
+  if (getItem(a)) return sendItem(a, getItem(a), true);   // el cliente cree que no lleva item: se lo devolvemos
   b.active = false;
   const kind = b.kind;   // el item es exactamente el kind visible de la caja
   setItem(a, kind);
@@ -605,9 +624,10 @@ function giantHits(tn) {
 }
 function onFire(p, m) {
   const a = actorOf(p, m);
-  if (!a || !getItem(a) || !actOk(a.slot)) return;
-  if (now() < (a.mv.stunUntil || 0)) return;               // aturdido no dispara
+  if (!a || !getItem(a)) return;
   const item = getItem(a);
+  // rechazado (accion muy seguida o aturdido): el cliente ya lo borro, se le devuelve para no quedar desincronizados
+  if (!actOk(a.slot) || now() < (a.mv.stunUntil || 0)) return sendItem(a, item, true);
   setItem(a, null);
   if (item === 'megafono') return shout(a);
   if (item === 'dona') return dropDonut(a);

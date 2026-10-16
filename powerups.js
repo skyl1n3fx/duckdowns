@@ -5,7 +5,7 @@
 const BOX_DP = 2.5, BOX_DX = 2, STUN_MS = 2000, IMMUNE_MS = 1000, RESPAWN_MS = 6000, ACT_GAP = 150;
 const ITEMS = ['bazooka', 'megafono', 'gigante', 'dona'];
 const TRAP_W = 6;
-const GIANT_MS = 8000, GIANT_SCALE = 3, BUMP_GAP = 2500;
+const GIANT_MS = 4000, GIANT_SCALE = 3, BUMP_GAP = 2500;
 let api = null, THREE = null, scene = null, audio = null, racing = false, startAt = 0;
 let boxes = [], boxRoot = null, hud = null, hudIcon = null, stunTxt = null, poolsReady = false;
 let TP, TD, TP2;                       // vectores temporales (sin allocations por frame)
@@ -659,7 +659,7 @@ function tryPickups(r, pu, n) {
   for (let i = 0; i < boxes.length; i++) {
     const o = boxes[i];
     if (!o.active || Math.abs(o.p - r.p) >= BOX_DP || Math.abs(o.x - r.x) >= BOX_DX) continue;
-    if (api.isOnline()) { const m = { t: 'pickup', box: o.id }; if (r !== api.me) m.slot = r.slot; api.send(m); pu.lastSend = n + 300; }
+    if (api.isOnline()) { const m = { t: 'pickup', box: o.id }; if (r !== api.me) m.slot = r.slot; api.send(m); pu.lastSend = n + 160; }   // reintento rapido: a 300 ms el pato ya paso la caja
     else pickLocal(r, o, n);
     return;
   }
@@ -713,7 +713,7 @@ function onNet(m) {
   if (!api) return;
   let r, o;
   switch (m.t) {
-    case 'item': r = bySlot(m.slot); if (r) { r.item = m.kind; puOf(r).botAt = api.now() + 1000 + Math.random() * 3500; if (r === api.me) snd.pickup(); } break;
+    case 'item': r = bySlot(m.slot); if (r) { r.item = m.kind; puOf(r).botAt = api.now() + 1000 + Math.random() * 3500; if (r === api.me && !m.again) snd.pickup(); } break;
     case 'boxTaken': o = boxes[m.box]; if (o) { o.active = false; boxPop(o); } break;
     case 'boxBack': o = boxes[m.box]; if (o) { o.active = true; if (m.kind) setKind(o, m.kind); } break;
     case 'missile': showMissile(bySlot(m.from), m.target == null ? null : bySlot(m.target), m.eta); break;

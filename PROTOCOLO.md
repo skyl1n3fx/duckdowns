@@ -77,7 +77,7 @@ S->C:
 - `welcome.consts`: `UFO_BOOST=1.4, UFO_BOOST_S=1.5, UFO_STUN_S=3, UFO_PER_RACE=3, UFO_COOLDOWN_S=15`.
 
 ## Gigante (3er power-up)
-- Consts en `welcome.consts`: `GIANT_S=8, GIANT_SCALE=3, GIANT_BUMP_R=4, GIANT_BUMP_STUN_S=2`.
+- Consts en `welcome.consts`: `GIANT_S=4, GIANT_SCALE=3, GIANT_BUMP_R=4, GIANT_BUMP_STUN_S=2`.
 - `fire` con item `gigante` -> `giant{slot,id,until,serverNow}` a todos: durante `GIANT_S` s el pato se dibuja `GIANT_SCALE` veces mas grande.
 - Inmunidad: mientras dura es inmune a todo stun (misil -> `miss{from,target}`; megafono y OVNI/KIRK no le hacen nada; cuenta entre los 3 del megafono pero no se aturde). Un gigante tampoco se aturde por el choque de otro gigante.
 - Choque: **lo detecta el servidor** (cada ~66 ms, con posiciones saneadas): todo pato (jugador o bot) a distancia `hypot(dp,dx) <= GIANT_BUMP_R` (=4, ya incluye el tamano escalado) de un gigante recibe `stun{slot,id,until,serverNow}` de `GIANT_BUMP_STUN_S`=2 s. Maximo 1 por objetivo cada 2.5 s; respeta inmunidad de 1 s post-stun y los del aire. **No existe `bump` cliente->servidor** (cualquier `bump` se ignora): el cliente solo anima cuando llega el `stun`.
