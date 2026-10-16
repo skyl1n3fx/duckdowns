@@ -19,13 +19,13 @@ const FINISH_GRACE_MS = 60000;
 // paleta fija (enteros 0xRRGGBB); el cliente envia uno de estos valores
 // ---- constantes compartidas con el cliente (CFG de carrera.html); unica fuente en el servidor ----
 const C = {
-  LENGTH: Math.min(5000, Math.max(100, Number(process.env.DUCK_LENGTH) || 520)),   // largo del rio; meta en p = LENGTH (DUCK_LENGTH solo para tests)
+  LENGTH: Math.min(5000, Math.max(100, Number(process.env.DUCK_LENGTH) || 1200)),   // largo del rio; meta en p = LENGTH (DUCK_LENGTH solo para tests)
   HALF_W: 11,             // semiancho navegable
   MAX_SPEED: 15,          // tope de velocidad de un jugador (u/s)
   BOT_MAX: 14.2,          // crucero maximo de bots
   BOT_RUBBER: 0.12,       // bonus maximo por rubber-band
   BOT_AVG: 12.5,
-  STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
+  GIANT_S: 8, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 1, UFO_PER_RACE: 1, JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
 };
 C.BOT_CAP = C.BOT_MAX * (1 + C.BOT_RUBBER) + 0.6;   // tope de bots incl. rubber-band
 const TOL_FINISH = 2;               // tolerancia en p para dar la meta
@@ -51,6 +51,19 @@ function genBoxes(seed) {   // 3 cajas por fila, ~9 filas repartidas en [60, LEN
   }
   return out;
 }
+function genRamps(seed, boxes) {   // una rampa entre cada par de filas de cajas (>=20 u de cualquier caja)
+  const R = mulberry32(seed ^ 0x2545f491), rows = [...new Set(boxes.map(b => b.p))].sort((a, b) => a - b), out = [];
+  for (let i = 0; i + 1 < rows.length && out.length < 8; i++) {
+    const p = Math.round(((rows[i] + rows[i + 1]) / 2 + (R() - 0.5) * 16) * 10) / 10;
+    const w = Math.round((4 + R() * 2) * 10) / 10, x = Math.round((R() - 0.5) * 12 * 10) / 10;
+    if (rows.every(r => Math.abs(r - p) >= 20)) out.push({ id: out.length, p, x, w });
+  }
+  return out;
+}
+const ITEMS = ['bazooka', 'megafono', 'gigante'];
+const BUMP_GAP_MS = 2500;           // un mismo objetivo solo puede ser embestido 1 vez cada 2.5 s
+// kind de cada caja: lo decide el servidor al generarla y en cada reaparicion (DUCK_ITEM solo para tests)
+const randomKind = () => (ITEMS.includes(process.env.DUCK_ITEM) ? process.env.DUCK_ITEM : ITEMS[crypto.randomInt(ITEMS.length)]);
 const COLORS = [0xffd21f, 0xff5fa8, 0x3aa0ff, 0x39d96b, 0xa96bff, 0xff8a2b, 0x22d3c5, 0xff4d4d, 0xffffff, 0x8b5a2b];
 function freeColor(want, selfId) {
   const used = new Set([...players.values()].filter(q => q.id !== selfId && q.color !== undefined).map(q => q.color));
@@ -64,6 +77,9 @@ const STATIC = {
   '/index.html': 'text/html; charset=utf-8',
   '/charlie.webp': 'image/webp',
   '/musica.mp3': 'audio/mpeg',
+  '/powerups.js': 'text/javascript; charset=utf-8',
+  '/rampas.js': 'text/javascript; charset=utf-8',
+  '/ovni.js': 'text/javascript; charset=utf-8',
 };
 const server = http.createServer((req, res) => {
   let p;
@@ -150,7 +166,9 @@ function applyMove(st, raw, cap, startAt, tNow) {
   const dt = clamp((tNow - st.tp) / 1000, 0.005, 5);
   const el = Math.max(0, (tNow - startAt) / 1000);
   const stunned = tNow < (st.stunUntil || 0);
-  const maxP = Math.min(cap * ENV_MARGIN * Math.max(0, el - (st.stunLost || 0)) + ENV_SLACK, C.LENGTH + 5);
+  // impulsos legitimos: salto de rampa (x1.25) o OVNI/KIRK (x1.4); se amplian tope y envolvente (envBonus)
+  cap *= Math.max(tNow < (st.airUntil || 0) ? C.JUMP_BOOST : 1, tNow < (st.ufoUntil || 0) ? C.UFO_BOOST : 1);
+  const maxP = Math.min(cap * ENV_MARGIN * Math.max(0, el - (st.stunLost || 0) + (st.envBonus || 0)) + ENV_SLACK, C.LENGTH + 5);
   let hi = Math.min(st.p + cap * STEP_MARGIN * dt + 1, maxP);
   if (stunned) hi = Math.min(hi, st.p + STUN_DRIFT * dt);   // aturdido: sin avance (solo deriva minima)
   const lo = Math.max(st.p - BACK_RATE * dt - 1, -1);
@@ -165,6 +183,18 @@ function applyMove(st, raw, cap, startAt, tNow) {
   clipped = clipped || vp !== raw.vp || vx !== raw.vx;
   st.p = p; st.x = x; st.vp = vp; st.vx = vx; st.tp = tNow; st.init = true;
   return clipped;
+}
+// El servidor decide el salto: p cruza la rampa y |x-ramp.x|<w/2 con la posicion saneada
+function checkRamps(st, prevP, slot, tNow) {
+  if (!race || tNow < (st.airUntil || 0) || tNow < (st.stunUntil || 0)) return;
+  for (const r of race.ramps) {
+    if (prevP < r.p && st.p >= r.p && Math.abs(st.x - r.x) < r.w / 2 && !(st.rampsDone && st.rampsDone.has(r.id))) {
+      (st.rampsDone = st.rampsDone || new Set()).add(r.id);
+      st.airUntil = tNow + C.JUMP_S * 1000; st.envBonus = (st.envBonus || 0) + (C.JUMP_BOOST - 1) * C.JUMP_S;
+      broadcast({ t: 'jump', slot, id: race.slots[slot].id, ramp: r.id, until: st.airUntil, serverNow: tNow });
+      return;
+    }
+  }
 }
 function newMove(startAt) { return { p: 0, x: 0, vp: 0, vx: 0, tp: startAt, init: false }; }
 
@@ -194,19 +224,21 @@ function maybeStart() {
   const lanes = [0, 1, 2, 3, 4, 5, 6, 7];
   for (let i = lanes.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [lanes[i], lanes[j]] = [lanes[j], lanes[i]]; }
   const slots = [];
-  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; });
+  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; p.ufoUsed = 0; });
   const spare = COLORS.filter(c => !list.some(q => q.color === c));
   for (let i = list.length; i < MAX_PLAYERS; i++) slots[lanes[i]] = { slot: lanes[i], id: null, nick: `Bot ${lanes[i] + 1}`, kind: 'bot', color: spare[i - list.length] };
   const t0 = now();
   const cd = list.length === 1 ? SOLO_COUNTDOWN_MS : COUNTDOWN_MS;
   race = { seed: crypto.randomInt(1, 2 ** 31), startAt: t0 + cd, slots, finishes: [], done: new Set(), bots: new Map(), timer: null, graceTimer: null, boxes: genBoxes(0), botItems: new Map(), lastAct: new Map(), timers: new Set() };
-  race.boxes = genBoxes(race.seed).map(b => ({ ...b, active: true }));
+  race.boxes = genBoxes(race.seed).map(b => ({ ...b, active: true, kind: randomKind() }));
+  race.bumpAt = new Map();
+  race.ramps = genRamps(race.seed, race.boxes);
   for (const p of list) p.mv = newMove(race.startAt);
   for (const s of slots) if (s.kind === 'bot') race.bots.set(s.slot, newMove(race.startAt));
   for (const p of list) { p.clips = 0; }
   hostClips = 0;
   phase = 'countdown';
-  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x }) => ({ id, p, x })) });
+  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps });
   broadcast(lobbyMsg());
   setTimeout(() => { if (phase === 'countdown') phase = 'race'; }, cd);
 }
@@ -303,7 +335,9 @@ function onMessage(p, m) {
       if (!race || phase !== 'race' || !p.inRace || p.dnf || race.done.has(p.slot) || now() < race.startAt) return;
       const raw = { p: num(m.p, -1e6, 1e6), x: num(m.x, -1e6, 1e6), vp: num(m.vp, -1e6, 1e6), vx: num(m.vx, -1e6, 1e6) };
       if (raw.p === null || raw.x === null || raw.vp === null || raw.vx === null) return;
+      const prevP = p.mv.p;
       if (applyMove(p.mv, raw, C.MAX_SPEED, race.startAt, now())) p.clips++;
+      checkRamps(p.mv, prevP, p.slot, now());
       tryFinishPlayer(p);
       return;
     }
@@ -314,7 +348,9 @@ function onMessage(p, m) {
         const raw = { p: num(b.p, -1e6, 1e6), x: num(b.x, -1e6, 1e6), vp: num(b.vp, -1e6, 1e6), vx: num(b.vx, -1e6, 1e6) };
         if (raw.p === null || raw.x === null || raw.vp === null || raw.vx === null) continue;
         const st = race.bots.get(b.slot);
+        const prevP = st.p;
         if (applyMove(st, raw, C.BOT_CAP, race.startAt, now())) hostClips++;
+        checkRamps(st, prevP, b.slot, now());
         st.fromHost = now();
       }
       if (hostClips > HOST_STRIKES) demoteHost(p);
@@ -327,6 +363,17 @@ function onMessage(p, m) {
     case 'finish':
       if (race && p.inRace && !p.dnf) { p.wantFinish = true; tryFinishPlayer(p); }
       return;
+    case 'kirk': {      // codigo secreto: OVNI (impulso al autor + laser que aturde a los demas), 1 vez por carrera
+      if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
+      const tn = now();
+      if ((p.ufoUsed || 0) >= C.UFO_PER_RACE || tn < (p.mv.stunUntil || 0)) return;
+      p.ufoUsed = (p.ufoUsed || 0) + 1;
+      p.mv.ufoUntil = tn + C.UFO_BOOST_S * 1000;
+      p.mv.envBonus = (p.mv.envBonus || 0) + (C.UFO_BOOST - 1) * C.UFO_BOOST_S;
+      broadcast({ t: 'ufo', from: p.slot, id: p.id, serverNow: tn, boostUntil: p.mv.ufoUntil, stunUntil: tn + C.UFO_STUN_S * 1000 });
+      for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.UFO_STUN_S * 1000);   // respeta inmunidad y aire
+      return;
+    }
     case 'pickup': onPickup(p, m); return;
     case 'fire': onFire(p, m); return;
     case 'event': {
@@ -375,10 +422,11 @@ function onPickup(p, m) {
   if (!b || !b.active || getItem(a)) return;
   if (Math.abs(a.mv.p - b.p) >= BOX_DP || Math.abs(a.mv.x - b.x) >= BOX_DX) return;   // posicion validada por el servidor
   b.active = false;
-  setItem(a, 'bazooka');
-  sendItem(a, 'bazooka');
+  const kind = b.kind;   // el item es exactamente el kind visible de la caja
+  setItem(a, kind);
+  sendItem(a, kind);
   broadcast({ t: 'boxTaken', box: b.id, slot: a.slot });
-  schedule(race, BOX_RESPAWN_MS, () => { b.active = true; broadcast({ t: 'boxBack', box: b.id }); });
+  schedule(race, BOX_RESPAWN_MS, () => { b.active = true; b.kind = randomKind(); broadcast({ t: 'boxBack', box: b.id, kind: b.kind }); });
 }
 function slotPos(slot) {
   const s = race.slots[slot];
@@ -386,11 +434,54 @@ function slotPos(slot) {
   const q = players.get(s.id);
   return q && q.inRace && !q.dnf ? q.mv : null;
 }
+// aturde si el pato esta en carrera y ni inmune, ni aturdido, ni en el aire
+function tryStun(slot, tn, ms = STUN_MS) {
+  const mv = slotPos(slot);
+  if (!mv || !mv.init || race.done.has(slot) || tn < (mv.immuneUntil || 0) || tn < (mv.stunUntil || 0) || tn < (mv.airUntil || 0) || tn < (mv.giantUntil || 0)) return false;
+  mv.stunUntil = tn + ms; mv.immuneUntil = mv.stunUntil + IMMUNE_MS; mv.stunLost = (mv.stunLost || 0) + ms / 1000;
+  broadcast({ t: 'stun', slot, id: race.slots[slot].id, until: mv.stunUntil, serverNow: tn });
+  return true;
+}
+// megafono: aturde a los SHOUT_N patos mas cercanos al que grita (distancia en (p,x), jugadores y bots, delante o detras);
+// el que grita no se aturde; inmunes y patos en el aire cuentan entre los cercanos pero no se ven afectados.
+function shout(a) {
+  const tn = now(), near = [];
+  for (const s of race.slots) {
+    if (s.slot === a.slot || race.done.has(s.slot)) continue;
+    const mv = slotPos(s.slot);
+    if (mv && mv.init) near.push({ slot: s.slot, d: Math.hypot(mv.p - a.mv.p, mv.x - a.mv.x) });
+  }
+  near.sort((u, v) => u.d - v.d || u.slot - v.slot);
+  const targets = near.slice(0, C.SHOUT_N).map(n => n.slot);
+  broadcast({ t: 'shout', from: a.slot, p: Math.round(a.mv.p * 100) / 100, x: Math.round(a.mv.x * 100) / 100, targets, serverNow: tn });
+  for (const s of targets) tryStun(s, tn);
+}
+// choque del gigante: lo detecta el servidor (loop de snap) con posiciones saneadas; no existe mensaje del cliente.
+// Cada objetivo solo puede ser aturdido por embestida 1 vez cada BUMP_GAP_MS; tryStun respeta inmunidad, aire y gigantes.
+function giantHits(tn) {
+  for (const s of race.slots) {
+    const g = slotPos(s.slot);
+    if (!g || !g.init || tn >= (g.giantUntil || 0) || race.done.has(s.slot) || tn < (g.stunUntil || 0)) continue;
+    for (const o of race.slots) {
+      if (o.slot === s.slot || race.done.has(o.slot)) continue;
+      const mv = slotPos(o.slot);
+      if (!mv || !mv.init || Math.hypot(mv.p - g.p, mv.x - g.x) > C.GIANT_BUMP_R) continue;
+      if (tn - (race.bumpAt.get(o.slot) || 0) < BUMP_GAP_MS) continue;
+      if (tryStun(o.slot, tn, C.GIANT_BUMP_STUN_S * 1000)) race.bumpAt.set(o.slot, tn);
+    }
+  }
+}
 function onFire(p, m) {
   const a = actorOf(p, m);
   if (!a || !getItem(a) || !actOk(a.slot)) return;
   if (now() < (a.mv.stunUntil || 0)) return;               // aturdido no dispara
+  const item = getItem(a);
   setItem(a, null);
+  if (item === 'megafono') return shout(a);
+  if (item === 'gigante') {
+    const tn = now(); a.mv.giantUntil = tn + C.GIANT_S * 1000;
+    return broadcast({ t: 'giant', slot: a.slot, id: race.slots[a.slot].id, until: a.mv.giantUntil, serverNow: tn });
+  }
   // objetivo: el pato con menor p mayor que el del tirador (jugador o bot, aun en carrera)
   let tgt = null, tp = Infinity;
   for (const s of race.slots) {
@@ -403,12 +494,7 @@ function onFire(p, m) {
   const eta = Math.round(clamp(0.6 + (tp - a.mv.p) / 50, 0.6, 1.6) * 1000);
   broadcast({ t: 'missile', from: a.slot, target: tgt, t0, eta: eta / 1000, serverNow: t0 });
   schedule(race, eta, () => {
-    const mv = slotPos(tgt), tn = now();
-    if (!mv || race.done.has(tgt) || tn < (mv.immuneUntil || 0) || tn < (mv.stunUntil || 0)) {
-      return broadcast({ t: 'miss', from: a.slot, target: tgt });
-    }
-    mv.stunUntil = tn + STUN_MS; mv.immuneUntil = mv.stunUntil + IMMUNE_MS; mv.stunLost = (mv.stunLost || 0) + STUN_MS / 1000;
-    broadcast({ t: 'stun', slot: tgt, id: race.slots[tgt].id, until: mv.stunUntil, serverNow: tn });
+    if (!tryStun(tgt, now())) broadcast({ t: 'miss', from: a.slot, target: tgt });
   });
 }
 
@@ -435,10 +521,12 @@ setInterval(() => {
     if (race.done.has(slot) || (st.fromHost && tn - st.fromHost < BOT_STALE_MS)) continue;
     if (tn < (st.stunUntil || 0)) { st.tp = tn; continue; }
     const dt = clamp((tn - st.tp) / 1000, 0, 1);
-    st.p = Math.min(st.p + C.BOT_AVG * dt, C.LENGTH + 1); st.vp = C.BOT_AVG; st.vx = 0; st.tp = tn; st.init = true;
+    const prevP = st.p;
+    st.p = Math.min(st.p + C.BOT_AVG * dt, C.LENGTH + 1); checkRamps(st, prevP, slot, tn); st.vp = C.BOT_AVG; st.vx = 0; st.tp = tn; st.init = true;
     tryFinishBot(slot);
     if (!race) return;
   }
+  giantHits(tn);
   const ps = [...players.values()].filter(p => p.inRace && !p.dnf && p.mv && p.mv.init)
     .map(p => ({ id: p.id, p: r2(p.mv.p), x: r2(p.mv.x), vp: r2(p.mv.vp), vx: r2(p.mv.vx), fin: race.done.has(p.slot) }));
   const bs = [...race.bots].map(([slot, st]) => ({ slot, p: r2(st.p), x: r2(st.x), vp: r2(st.vp), vx: r2(st.vx) }));
