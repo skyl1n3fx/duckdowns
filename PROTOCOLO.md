@@ -58,7 +58,7 @@ C->S (el `slot` solo lo puede usar el host efectivo, para sus bots; sin `slot` a
 - `fire{slot?}`: solo con item y no aturdido.
 
 S->C:
-- `item{slot, kind:'bazooka'|'megafono'|'gigante'}` al dueno (a los bots, al host). `kind` = el de la caja recogida. Maximo 1 item.
+- `item{slot, kind:'bazooka'|'megafono'|'gigante'|'dona'}` al dueno (a los bots, al host). `kind` = el de la caja recogida. Maximo 1 item.
 - `boxTaken{box, slot}` a todos; `boxBack{box,kind}` a los 6 s.
 - bazooka: `missile{from, target|null, t0, eta, serverNow}` (target = pato con menor `p` mayor que el del tirador, jugador o bot; null = se pierde). Al impactar (`eta` s) llega `stun` o `miss{from,target}` (si el objetivo esta en el aire, inmune o ya aturdido).
 - megafono: `shout{from,p,x,targets:[slot x3],serverNow}` inmediato: los 3 patos mas cercanos en distancia (p,x), delante o detras, jugadores y bots (excluye al que grita; los del aire/inmunes cuentan entre los 3 pero no se ven afectados). Luego un `stun` por cada afectado.
@@ -82,3 +82,16 @@ S->C:
 - Inmunidad: mientras dura es inmune a todo stun (misil -> `miss{from,target}`; megafono y OVNI/KIRK no le hacen nada; cuenta entre los 3 del megafono pero no se aturde). Un gigante tampoco se aturde por el choque de otro gigante.
 - Choque: **lo detecta el servidor** (cada ~66 ms, con posiciones saneadas): todo pato (jugador o bot) a distancia `hypot(dp,dx) <= GIANT_BUMP_R` (=4, ya incluye el tamano escalado) de un gigante recibe `stun{slot,id,until,serverNow}` de `GIANT_BUMP_STUN_S`=2 s. Maximo 1 por objetivo cada 2.5 s; respeta inmunidad de 1 s post-stun y los del aire. **No existe `bump` cliente->servidor** (cualquier `bump` se ignora): el cliente solo anima cuando llega el `stun`.
 - El gigante puede seguir usando KIRK (si no esta aturdido). Los bots gigantes los dispara el host con `fire{slot}` igual que los demas items.
+
+## Dona (4o power-up: trampa)
+- `welcome.consts`: `DONUT_R_X=3, DONUT_R_P=1.5, DONUT_BLIND_S=3, DONUT_SPLASH_R=10, DONUT_SPLASH_S=1.5, DONUT_ARM_S=1.5, DONUT_TTL_S=60, DONUT_MAX=6`.
+- `fire` con `dona`: el servidor deja una trampa en la posicion saneada del pato, 2 u detras (`p-2`), con rectangulo de `|dx|<=DONUT_R_X` y `|dp|<=DONUT_R_P` (2 carriles), fija en p. Broadcast `trapAdd{id,by:<slot>,p,x,r:DONUT_R_X,rp:DONUT_R_P,serverNow,armAt,expireAt}` (ms de reloj de servidor). `welcome.traps` y `start.traps` traen las trampas activas (`start.traps` va vacio al empezar).
+- Activacion (servidor, loop de snap, posiciones saneadas, barrido en p entre ticks): el primer pato (jugador o bot) que entra al rectangulo. El autor no la activa hasta `armAt` (1.5 s despues de dejarla). Los patos en el aire (rampa) y los gigantes pasan por encima: ni la activan ni la consumen.
+- `donut{id,target:<slot>,p,x,serverNow,blindUntil,splash:[{slot,until}]}`: el pato `target` queda ciego `DONUT_BLIND_S`=3 s (solo visual, sin stun); `splash` lista los demas patos a `hypot(dp,dx)<=DONUT_SPLASH_R`=10 de la trampa (ciegos 1.5 s hasta `until`); aire y gigantes no entran en `splash`. Luego `trapGone{id}`.
+- Dura hasta ser activada o `DONUT_TTL_S`=60 s (`trapGone{id}`). Maximo `DONUT_MAX`=6 trampas simultaneas: la mas vieja desaparece (`trapGone`). Se limpian al volver al lobby.
+
+## CANGRI (easter egg C-A-N-G-R-I)
+- C->S `cangri{}` al completar la secuencia. Solo en `race` iniciada, no aturdido, no llegado a meta. **2 usos por jugador por carrera** (`CANGRI_PER_RACE`), **cooldown 15 s** (`CANGRI_COOLDOWN_S`). Rechazo por cooldown/sin usos/aturdido -> `cangriNo{usesLeft,cooldownUntil,serverNow}`; fuera de carrera, silencio.
+- S->C `cangriState{usesLeft,cooldownUntil,serverNow}` al autor al iniciar la carrera y tras cada uso.
+- S->C `cangri{from:<slot>,id,serverNow,flashMs:1500,usesLeft,cooldownUntil}` a todos: el cliente muestra la foto `flashMs` ms y sacude la camara. Ademas `stun` de `CANGRI_STUN_S`=1 s a todos los demas patos (jugadores y bots; no al autor), con la inmunidad post-stun, de aire y de gigante.
+- `welcome.consts`: `CANGRI_PER_RACE=2, CANGRI_COOLDOWN_S=15, CANGRI_STUN_S=1`. Estaticos: `/cangri.webp` (`image/webp`) y `GET /sfx/cangri.mp3` (`audio/mpeg`, archivo local no versionado en `sfx/`; 404 si falta; solo ese archivo se sirve de `sfx/`).

@@ -25,6 +25,11 @@ const C = {
   BOT_MAX: 14.2,          // crucero maximo de bots
   BOT_RUBBER: 0.12,       // bonus maximo por rubber-band
   BOT_AVG: 12.5,
+  CANGRI_PER_RACE: 2, CANGRI_STUN_S: 1, CANGRI_FLASH_MS: 1500,
+  CANGRI_COOLDOWN_S: Math.min(60, Math.max(0, Number(process.env.DUCK_CANGRI_CD ?? 15))),   // DUCK_CANGRI_CD solo para tests
+  DONUT_R_X: 3, DONUT_R_P: 1.5, DONUT_BLIND_S: 3, DONUT_SPLASH_R: 10, DONUT_SPLASH_S: 1.5, DONUT_ARM_S: 1.5,
+  DONUT_TTL_S: Math.min(600, Math.max(1, Number(process.env.DUCK_DONUT_TTL) || 60)),     // DUCK_DONUT_* solo para tests
+  DONUT_MAX: Math.min(6, Math.max(1, Number(process.env.DUCK_DONUT_MAX) || 6)),
   GIANT_S: 8, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 3, UFO_PER_RACE: 3,
   UFO_COOLDOWN_S: Math.min(60, Math.max(0, Number(process.env.DUCK_UFO_CD ?? 15))),   // DUCK_UFO_CD solo para tests
   JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
@@ -62,7 +67,7 @@ function genRamps(seed, boxes) {   // una rampa entre cada par de filas de cajas
   }
   return out;
 }
-const ITEMS = ['bazooka', 'megafono', 'gigante'];
+const ITEMS = ['bazooka', 'megafono', 'gigante', 'dona'];
 const BUMP_GAP_MS = 2500;           // un mismo objetivo solo puede ser embestido 1 vez cada 2.5 s
 // kind de cada caja: lo decide el servidor al generarla y en cada reaparicion (DUCK_ITEM solo para tests)
 const randomKind = () => (ITEMS.includes(process.env.DUCK_ITEM) ? process.env.DUCK_ITEM : ITEMS[crypto.randomInt(ITEMS.length)]);
@@ -82,6 +87,7 @@ const STATIC = {
   '/powerups.js': 'text/javascript; charset=utf-8',
   '/rampas.js': 'text/javascript; charset=utf-8',
   '/ovni.js': 'text/javascript; charset=utf-8',
+  '/cangri.webp': 'image/webp',
 };
 const server = http.createServer((req, res) => {
   let p;
@@ -96,6 +102,7 @@ const server = http.createServer((req, res) => {
   let type = STATIC[p];                         // lista blanca: sin traversal posible
   let file = type && path.join(ROOT, path.basename(p));
   if (!type && p.startsWith('/musica/') && tracks().includes(p.slice(8))) { type = 'audio/mpeg'; file = path.join(ROOT, 'musica', p.slice(8)); }
+  if (!type && p === '/sfx/cangri.mp3') { type = 'audio/mpeg'; file = path.join(ROOT, 'sfx', 'cangri.mp3'); }   // solo ese archivo (no versionado; 404 si falta)
   if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) {
     res.writeHead(type ? 405 : 404, { 'content-type': 'text/plain' });
     return res.end('no');
@@ -269,6 +276,7 @@ function sanitizeData(v, depth = 0) {
 // Easter egg: quien se llame "ale" tiene KIRK infinitos (usesLeft = 999 = infinito para el cliente).
 const kirkInf = p => String(p.nick || '').trim().toLowerCase() === 'ale';
 const kirkLeft = p => kirkInf(p) ? 999 : Math.max(0, C.UFO_PER_RACE - (p.ufoUsed || 0));
+function cangriState(p) { return { t: 'cangriState', usesLeft: Math.max(0, C.CANGRI_PER_RACE - (p.cangriUsed || 0)), cooldownUntil: p.cangriNext || 0, serverNow: now() }; }
 function kirkState(p) { return { t: 'kirkState', usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext || 0, serverNow: now() }; }
 
 // ---------- carrera ----------
@@ -280,24 +288,24 @@ function maybeStart(force) {
   const lanes = [0, 1, 2, 3, 4, 5, 6, 7];
   for (let i = lanes.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [lanes[i], lanes[j]] = [lanes[j], lanes[i]]; }
   const slots = [];
-  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; p.ufoUsed = 0; p.ufoNext = 0; });
+  list.forEach((p, i) => { slots[lanes[i]] = { slot: lanes[i], id: p.id, nick: p.nick, kind: 'player', color: p.color }; p.slot = lanes[i]; p.inRace = true; p.finished = false; p.mv = null; p.wantFinish = false; p.item = null; p.ufoUsed = 0; p.ufoNext = 0; p.cangriUsed = 0; p.cangriNext = 0; });
   const spare = COLORS.filter(c => !list.some(q => q.color === c));
   for (let i = list.length; i < MAX_PLAYERS; i++) slots[lanes[i]] = { slot: lanes[i], id: null, nick: `Bot ${lanes[i] + 1}`, kind: 'bot', color: spare[i - list.length] };
   const t0 = now();
   const cd = list.length === 1 ? SOLO_COUNTDOWN_MS : COUNTDOWN_MS;
   race = { seed: crypto.randomInt(1, 2 ** 31), startAt: t0 + cd, slots, finishes: [], done: new Set(), bots: new Map(), timer: null, graceTimer: null, boxes: genBoxes(0), botItems: new Map(), lastAct: new Map(), timers: new Set() };
   race.boxes = genBoxes(race.seed).map(b => ({ ...b, active: true, kind: randomKind() }));
-  race.bumpAt = new Map();
+  race.bumpAt = new Map(); race.traps = []; race.nextTrap = 0;
   race.ramps = genRamps(race.seed, race.boxes);
   for (const p of list) p.mv = newMove(race.startAt);
   for (const s of slots) if (s.kind === 'bot') race.bots.set(s.slot, newMove(race.startAt));
   for (const p of list) { p.clips = 0; }
   hostClips = 0;
   phase = 'countdown';
-  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps });
+  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps, traps: [] });
   broadcast(lobbyMsg());
   pickSong('race');
-  for (const p of list) send(p.ws, kirkState(p));
+  for (const p of list) { send(p.ws, kirkState(p)); send(p.ws, cangriState(p)); }
   setTimeout(() => { if (phase === 'countdown') phase = 'race'; }, cd);
 }
 
@@ -375,7 +383,7 @@ function onMessage(p, m) {
       p.nick = uniqueNick(m.nick, p.id);
       p.color = freeColor(m.color, p.id);
       pickHost();
-      send(p.ws, { t: 'welcome', id: p.id, nick: p.nick, hostId, serverNow: now(), phase, seed: race ? race.seed : null, maxPlayers: MAX_PLAYERS, color: p.color, palette: COLORS, shareUrls: shareUrls(), consts: C, music: song });
+      send(p.ws, { t: 'welcome', id: p.id, nick: p.nick, hostId, serverNow: now(), phase, seed: race ? race.seed : null, maxPlayers: MAX_PLAYERS, color: p.color, palette: COLORS, shareUrls: shareUrls(), consts: C, music: song, traps: race ? race.traps.map(trapMsg) : [] });
       sendLobby();
       return;
     case 'ping': return send(p.ws, { t: 'pong', serverNow: now() });
@@ -441,6 +449,18 @@ function onMessage(p, m) {
       broadcast({ t: 'ufo', from: p.slot, id: p.id, serverNow: tn, boostUntil: p.mv.ufoUntil, stunUntil: tn + C.UFO_STUN_S * 1000, usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext });
       for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.UFO_STUN_S * 1000);   // respeta inmunidad, aire y gigante
       send(p.ws, kirkState(p));
+      return;
+    }
+    case 'cangri': {    // easter egg C-A-N-G-R-I: foto + stun de 1 s a todos menos al autor; 2 usos por carrera, cooldown 15 s
+      if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
+      const tn = now();
+      if ((p.cangriUsed || 0) >= C.CANGRI_PER_RACE || tn < (p.cangriNext || 0) || tn < (p.mv.stunUntil || 0)) {
+        const k = cangriState(p); return send(p.ws, { t: 'cangriNo', usesLeft: k.usesLeft, cooldownUntil: k.cooldownUntil, serverNow: k.serverNow });
+      }
+      p.cangriUsed = (p.cangriUsed || 0) + 1; p.cangriNext = tn + C.CANGRI_COOLDOWN_S * 1000;
+      broadcast({ t: 'cangri', from: p.slot, id: p.id, serverNow: tn, flashMs: C.CANGRI_FLASH_MS, usesLeft: C.CANGRI_PER_RACE - p.cangriUsed, cooldownUntil: p.cangriNext });
+      for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.CANGRI_STUN_S * 1000);   // respeta inmunidad, aire y gigante
+      send(p.ws, cangriState(p));
       return;
     }
     case 'pickup': onPickup(p, m); return;
@@ -525,6 +545,46 @@ function shout(a) {
   broadcast({ t: 'shout', from: a.slot, p: Math.round(a.mv.p * 100) / 100, x: Math.round(a.mv.x * 100) / 100, targets, serverNow: tn });
   for (const s of targets) tryStun(s, tn);
 }
+// dona: trampa fija en p, 2 carriles de ancho, que cegara visualmente al primer pato que la pise
+function removeTrap(tr) {
+  const i = race.traps.indexOf(tr); if (i < 0) return;
+  race.traps.splice(i, 1);
+  broadcast({ t: 'trapGone', id: tr.id });
+}
+const trapMsg = tr => ({ t: 'trapAdd', id: tr.id, by: tr.by, p: tr.p, x: tr.x, r: C.DONUT_R_X, rp: C.DONUT_R_P, serverNow: tr.t0, armAt: tr.armAt, expireAt: tr.expireAt });
+function dropDonut(a) {
+  const tn = now();
+  const tr = { id: race.nextTrap++, by: a.slot, p: Math.round((a.mv.p - 2) * 100) / 100, x: Math.round(a.mv.x * 100) / 100, t0: tn, armAt: tn + C.DONUT_ARM_S * 1000, expireAt: tn + C.DONUT_TTL_S * 1000, lastP: new Map() };
+  race.traps.push(tr);
+  while (race.traps.length > C.DONUT_MAX) removeTrap(race.traps[0]);   // la mas vieja desaparece
+  broadcast(trapMsg(tr));
+  schedule(race, C.DONUT_TTL_S * 1000, () => removeTrap(tr));
+}
+// Deteccion en el loop de snap con posiciones saneadas; barrido en p desde el tick anterior para no saltarse la trampa
+function checkTraps(tn) {
+  for (const tr of race.traps.slice()) {
+    for (const s of race.slots) {
+      if (race.done.has(s.slot)) continue;
+      const mv = slotPos(s.slot);
+      if (!mv || !mv.init) continue;
+      const prev = tr.lastP.get(s.slot) ?? mv.p; tr.lastP.set(s.slot, mv.p);
+      if (s.slot === tr.by && tn < tr.armAt) continue;                      // el autor no la activa durante 1.5 s
+      if (tn < (mv.airUntil || 0) || tn < (mv.giantUntil || 0)) continue;   // por encima / gigantes: ni la activan ni se consume
+      const lo = Math.min(prev, mv.p) - C.DONUT_R_P, hi = Math.max(prev, mv.p) + C.DONUT_R_P;
+      if (tr.p < lo || tr.p > hi || Math.abs(mv.x - tr.x) > C.DONUT_R_X) continue;
+      const splash = [];
+      for (const o of race.slots) {
+        if (o.slot === s.slot || race.done.has(o.slot)) continue;
+        const om = slotPos(o.slot);
+        if (!om || !om.init || tn < (om.giantUntil || 0) || tn < (om.airUntil || 0)) continue;
+        if (Math.hypot(om.p - tr.p, om.x - tr.x) <= C.DONUT_SPLASH_R) splash.push({ slot: o.slot, until: tn + C.DONUT_SPLASH_S * 1000 });
+      }
+      broadcast({ t: 'donut', id: tr.id, target: s.slot, p: tr.p, x: tr.x, serverNow: tn, blindUntil: tn + C.DONUT_BLIND_S * 1000, splash });
+      removeTrap(tr);
+      break;
+    }
+  }
+}
 // choque del gigante: lo detecta el servidor (loop de snap) con posiciones saneadas; no existe mensaje del cliente.
 // Cada objetivo solo puede ser aturdido por embestida 1 vez cada BUMP_GAP_MS; tryStun respeta inmunidad, aire y gigantes.
 function giantHits(tn) {
@@ -547,6 +607,7 @@ function onFire(p, m) {
   const item = getItem(a);
   setItem(a, null);
   if (item === 'megafono') return shout(a);
+  if (item === 'dona') return dropDonut(a);
   if (item === 'gigante') {
     const tn = now(); a.mv.giantUntil = tn + C.GIANT_S * 1000;
     return broadcast({ t: 'giant', slot: a.slot, id: race.slots[a.slot].id, until: a.mv.giantUntil, serverNow: tn });
@@ -596,6 +657,7 @@ setInterval(() => {
     if (!race) return;
   }
   giantHits(tn);
+  checkTraps(tn);
   const ps = [...players.values()].filter(p => p.inRace && !p.dnf && p.mv && p.mv.init)
     .map(p => ({ id: p.id, p: r2(p.mv.p), x: r2(p.mv.x), vp: r2(p.mv.vp), vx: r2(p.mv.vx), fin: race.done.has(p.slot) }));
   const bs = [...race.bots].map(([slot, st]) => ({ slot, p: r2(st.p), x: r2(st.x), vp: r2(st.vp), vx: r2(st.vx) }));
