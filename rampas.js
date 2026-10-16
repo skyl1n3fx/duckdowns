@@ -2,7 +2,8 @@
    Contrato: init(api), onRaceStart(start), update(dt,t), onNet(msg), onRaceEnd(). El servidor decide el salto (msg 'jump'); offline se detecta aqui. */
 (function () {
 'use strict';
-const JUMP_MS = 1000, LEN = 5.2, H = 1.35, PEAK = 3.4;
+let JUMP_MS = 1000;
+const LEN = 5.2, H = 1.35, PEAK_MIN = 1.6, PEAK_MAX = 3.6, TOP = H - 0.08, SLOPE = Math.atan(H / LEN);
 const COLS = [[0xff4d6d, 0xffd6e0], [0x2ec4f1, 0xd6f5ff], [0xffb703, 0xfff0c2], [0x7bd957, 0xe3ffd6], [0xb57bff, 0xeadcff], [0xff7f3f, 0xffe1cf], [0x00d1b2, 0xcffff4], [0xff5fa8, 0xffe0f0]];
 let api = null, THREE = null, scene = null, audio = null, racing = false;
 let ramps = [], root = null, TP, TD, G = {}, offRamps = [];
@@ -47,8 +48,8 @@ function buildShared() {
 }
 function mkRamp(rp, i) {
   const T = THREE, g = new T.Group(), ci = i % COLS.length;
-  const w = new T.Mesh(G.wedge, G.mats[ci]); w.scale.set(rp.w, H, LEN); w.castShadow = true; g.add(w);
-  const ar = new T.Mesh(G.arrowG, G.arrowM[ci]); ar.position.set(0, H + 1.2, -0.3); g.add(ar);
+  const w = new T.Mesh(G.wedge, G.mats[ci]); w.scale.set(rp.w, H, LEN); w.position.z = -LEN / 2; w.castShadow = true; g.add(w);
+  const ar = new T.Mesh(G.arrowG, G.arrowM[ci]); ar.position.set(0, H + 1.2, -LEN / 2 - 0.3); g.add(ar);
   g.visible = false; root.add(g);
   return { id: rp.id, p: rp.p, x: rp.x, w: rp.w, g, ar };
 }
@@ -56,7 +57,7 @@ function setRamps(list) {
   for (const o of ramps) root.remove(o.g);
   ramps = list.map(mkRamp);
   for (const o of ramps) {
-    api.trackToWorld(o.p, o.x, TP, TD);
+    api.trackToWorld(o.p - LEN / 2, o.x, TP, TD);   // centro de la cuna: orientacion tangente a la curva en su punto medio
     o.g.position.set(TP.x, -0.08, TP.z); o.g.rotation.y = -Math.atan2(TD.x, -TD.z);
   }
 }
@@ -94,32 +95,61 @@ function updFx(dt) {
 }
 
 /* ---------- salto ---------- */
-function rpOf(r) { return r._rp || (r._rp = { seen: 0, air: false, pp: -1, done: null, landAt: 0 }); }
-function jumpStart(r, rp, near) { rp.air = true; if (near) snd.boing(); }
+function rpOf(r) { return r._rp || (r._rp = { seen: 0, air: false, pp: -1, done: null, landAt: 0, pred: 0, vUntil: 0, y0: 0, peak: 2.4, lastH: 0 }); }
+// altura/inclinacion de la cuna bajo el pato (por posicion: sirve para yo, bots y remotos interpolados)
+let CH = 0, CP = 0;
+function climb(r) {
+  CH = 0; CP = 0;
+  for (let i = 0; i < ramps.length; i++) {
+    const o = ramps[i], d = o.p - r.p;
+    if (d < -2 || d > LEN || Math.abs(r.x - o.x) >= o.w / 2) continue;
+    if (d >= 0) { CH = Math.max(0, TOP * (1 - d / LEN)); CP = SLOPE * Math.min(1, (LEN - d) / 0.8); }
+    else { const f = 1 + d / 2; CH = TOP * f; CP = SLOPE * f; }   // pasado el labio: se sostiene brevemente hasta que llegue el 'jump'
+    return;
+  }
+}
+function jumpStart(r, rp, near) {
+  rp.air = true; rp.y0 = rp.lastH; rp.peak = PEAK_MIN + (PEAK_MAX - PEAK_MIN) * Math.min(1, Math.max(0, (r.vp - 5) / 10));
+  if (near) snd.boing();
+}
 function jumpEnd(r, rp, near) {
-  rp.air = false; rp.landAt = performance.now();
+  rp.air = false; rp.pred = 0; rp.landAt = performance.now();
   const q = r.duck.root.position; splash(q.x, q.z, true);
   if (near) snd.land();
 }
-// squash/stretch segun u (0..1 en el aire) o ms desde el aterrizaje
 function setScale(bob, sx, sy) { bob.scale.set(sx, sy, sx); }
-function updJump(r, rp, n, me, camT) {
-  const bob = r.duck.bob, au = r.airUntil || 0, near = r === me || (me && Math.abs(r.p - me.p) < 45);
+function updJump(r, rp, n, me, camT, dt) {
+  const bob = r.duck.bob;
+  let au = r.airUntil || 0;
+  if (rp.pred) {                                  // salto predicho localmente (online): se reconcilia con el 'jump' del servidor
+    if (au > n && au > rp.pred) rp.vUntil += (au - rp.vUntil) * Math.min(1, dt * 10);
+    else if (n > rp.pred + 350 && (r.airUntil || 0) <= rp.pred) { rp.pred = 0; rp.air = false; rp.cancelY = rp.lastH; bob.scale.set(1, 1, 1); }   // el servidor no lo concedio: se cancela
+    if (rp.pred) au = rp.vUntil;
+  }
+  const near = r === me || (me && Math.abs(r.p - me.p) < 45);
+  let y = 0;
   if (au > n) {
-    if (rp.seen !== au) { rp.seen = au; jumpStart(r, rp, near); }
+    if (rp.seen !== au && !rp.pred) rp.seen = au;
+    if (!rp.air) jumpStart(r, rp, near);
     const u = Math.min(1, Math.max(0, 1 - (au - n) / JUMP_MS));
-    bob.position.y += PEAK * 4 * u * (1 - u);
-    bob.rotation.x += -u * 6.2831853;                     // voltereta completa hacia adelante
+    y = rp.y0 * (1 - u) + rp.peak * 4 * u * (1 - u);
+    bob.position.y += y;
+    bob.rotation.x += SLOPE * (1 - Math.min(1, u * 2.5)) * (rp.y0 > 0.2 ? 1 : 0) - u * 6.2831853;   // voltereta completa
     let sy = 1;
-    if (u < 0.12) sy = 1 - 0.3 * Math.sin(u / 0.12 * Math.PI * 0.5);     // agacha para el despegue
-    else if (u < 0.55) sy = 1.28 - 0.28 * ((u - 0.12) / 0.43);            // estira subiendo
-    else if (u > 0.9) sy = 1 + 0.25 * ((u - 0.9) / 0.1);                  // estira antes de caer
+    if (u < 0.12) sy = 1 - 0.3 * Math.sin(u / 0.12 * Math.PI * 0.5);
+    else if (u < 0.55) sy = 1.28 - 0.28 * ((u - 0.12) / 0.43);
+    else if (u > 0.9) sy = 1 + 0.25 * ((u - 0.9) / 0.1);
     setScale(bob, 1 / Math.sqrt(sy), sy);
-    if (r === me) camT.v = Math.sin(u * Math.PI);
+    if (r === me) camT.v = Math.min(1, y / PEAK_MAX);
+    rp.lastH = y;
   } else {
     if (rp.air) jumpEnd(r, rp, near);
+    climb(r);
+    if (rp.cancelY > 0.01) { rp.cancelY *= Math.exp(-dt * 10); bob.position.y += rp.cancelY; }
+    bob.position.y += CH; bob.rotation.x += CP; rp.lastH = CH;
+    y = CH;
     const e = (performance.now() - rp.landAt) / 1000;
-    if (rp.landAt && e < 0.3) {                                          // squash al caer y rebote
+    if (rp.landAt && e < 0.3) {
       const k = Math.exp(-e * 14) * Math.cos(e * 26), sy = 1 - 0.35 * k;
       setScale(bob, 1 / Math.sqrt(sy), sy);
     } else if (rp.landAt) { rp.landAt = 0; setScale(bob, 1, 1); }
@@ -155,16 +185,18 @@ function update(dt, t) {
   }
   for (let i = 0; i < R.length; i++) {
     const r = R[i], rp = rpOf(r);
-    if (off && racing && !r.finished && !r.dead && rp.pp >= 0 && n >= (r.airUntil || 0) && n >= (r.stunUntil || 0)) {
+    if (racing && !r.finished && !r.dead && rp.pp >= 0 && (off || api.isSim(r)) && n >= (r.airUntil || 0) && !rp.pred && n >= (r.stunUntil || 0)) {
       for (let j = 0; j < ramps.length; j++) {
         const o = ramps[j];
         if (rp.pp < o.p && r.p >= o.p && Math.abs(r.x - o.x) < o.w / 2 && !(rp.done && rp.done[o.id])) {
-          (rp.done || (rp.done = {}))[o.id] = true; r.airUntil = n + JUMP_MS; break;
+          (rp.done || (rp.done = {}))[o.id] = true;
+          if (off) r.airUntil = n + JUMP_MS; else { rp.pred = n; rp.vUntil = n + JUMP_MS; }   // online: solo visual; el servidor decide
+          break;
         }
       }
     }
     rp.pp = r.p;
-    updJump(r, rp, n, me, camT);
+    updJump(r, rp, n, me, camT, dt);
   }
   if (api.fx) api.fx.camUp = camT.v * 1.8;
   updFx(dt);
@@ -172,14 +204,14 @@ function update(dt, t) {
 function onNet(m) {
   if (!api || m.t !== 'jump') return;
   const R = api.racers;
-  for (let i = 0; i < R.length; i++) if (R[i].slot === m.slot) { R[i].airUntil = m.until; break; }
+  for (let i = 0; i < R.length; i++) if (R[i].slot === m.slot) { R[i].airUntil = m.until; const rp = rpOf(R[i]); (rp.done || (rp.done = {}))[m.ramp] = true; break; }
 }
 function resetRacers() {
   const R = api.racers;
-  for (let i = 0; i < R.length; i++) { const r = R[i], rp = rpOf(r); r.airUntil = 0; rp.seen = 0; rp.air = false; rp.pp = -1; rp.done = null; rp.landAt = 0; r.duck.bob.scale.set(1, 1, 1); }
+  for (let i = 0; i < R.length; i++) { const r = R[i], rp = rpOf(r); r.airUntil = 0; rp.seen = 0; rp.air = false; rp.pp = -1; rp.done = null; rp.landAt = 0; rp.pred = 0; rp.lastH = 0; r.duck.bob.scale.set(1, 1, 1); }
 }
 function onRaceStart(st) {
-  racing = true; resetRacers();
+  racing = true; JUMP_MS = ((api.consts && api.consts.JUMP_S) || 1) * 1000; resetRacers();
   setRamps(st && st.ramps ? st.ramps : genOffline((st && st.seed) | 0));
 }
 function onRaceEnd() { racing = false; if (!api) return; resetRacers(); if (api.fx) api.fx.camUp = 0; }
