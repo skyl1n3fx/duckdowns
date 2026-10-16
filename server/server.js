@@ -33,6 +33,8 @@ const C = {
   GIANT_S: 4, GIANT_SCALE: 3, GIANT_BUMP_R: 4, GIANT_BUMP_STUN_S: 2, UFO_BOOST: 1.4, UFO_BOOST_S: 1.5, UFO_STUN_S: 3, UFO_PER_RACE: 3,
   UFO_COOLDOWN_S: Math.min(60, Math.max(0, Number(process.env.DUCK_UFO_CD ?? 15))),   // DUCK_UFO_CD solo para tests
   HOP_S: 1.6, HOP_MIN_S: 0.5, HOP_FALL_S: 0.3, HOP_CD_S: 1.5,   // salto con espacio: aire maximo (planeando), minimo, caida, cooldown
+  NUKE_DELAY_S: 5, NUKE_STUN_S: 2.5, NUKE_DIZZY_S: 5,   // explosion: conmocion (stun) y luego mareo (solo visual/control en el cliente)
+  DRAFT_DP: 9, DRAFT_DX: 1.8, DRAFT_BOOST: 1.15,   // rebufo: pato delante a <DRAFT_DP y <DRAFT_DX de lado -> tope x DRAFT_BOOST   // bomba atomica: cuenta atras desde que se recoge
   JUMP_S: 1, JUMP_BOOST: 1.25, SHOUT_N: 3, STUN_S: 2, IMMUNE_S: 1, BOX_RESPAWN_S: 6,          // velocidad media (bots simulados por el servidor)
 };
 C.BOT_CAP = C.BOT_MAX * (1 + C.BOT_RUBBER) + 0.6;   // tope de bots incl. rubber-band
@@ -88,6 +90,8 @@ const STATIC = {
   '/powerups.js': 'text/javascript; charset=utf-8',
   '/rampas.js': 'text/javascript; charset=utf-8',
   '/ovni.js': 'text/javascript; charset=utf-8',
+  '/modmenu.js': 'text/javascript; charset=utf-8',
+  '/nuke.js': 'text/javascript; charset=utf-8',
   '/cangri.webp': 'image/webp',
   '/cangri1.webp': 'image/webp',
   '/cangri2.webp': 'image/webp',
@@ -223,13 +227,14 @@ const sendLobby = () => { armLobby(); broadcast(lobbyMsg()); };
 // ---------- validacion de movimiento ----------
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // st: {p,x,vp,vx,tp(ms ultimo),init}; raw: valores del cliente (ya numericos). Devuelve true si hubo recorte.
-function applyMove(st, raw, cap, startAt, tNow) {
+function applyMove(st, raw, cap, startAt, tNow, envCap = cap) {   // envCap: tope para la envolvente absoluta (el rebufo solo suma via envBonus)
   const dt = clamp((tNow - st.tp) / 1000, 0.005, 5);
   const el = Math.max(0, (tNow - startAt) / 1000);
   const stunned = tNow < (st.stunUntil || 0);
   // impulsos legitimos: salto de rampa (x1.25) o OVNI/KIRK (x1.4); se amplian tope y envolvente (envBonus)
-  cap *= Math.max(tNow < (st.airUntil || 0) ? C.JUMP_BOOST : 1, tNow < (st.ufoUntil || 0) ? C.UFO_BOOST : 1);
-  const maxP = Math.min(cap * ENV_MARGIN * Math.max(0, el - (st.stunLost || 0) + (st.envBonus || 0)) + ENV_SLACK, C.LENGTH + 5);
+  const boost = Math.max(tNow < (st.airUntil || 0) ? C.JUMP_BOOST : 1, tNow < (st.ufoUntil || 0) ? C.UFO_BOOST : 1);
+  cap *= boost; envCap *= boost;
+  const maxP = Math.min(envCap * ENV_MARGIN * Math.max(0, el - (st.stunLost || 0) + (st.envBonus || 0)) + ENV_SLACK, C.LENGTH + 5);
   let hi = Math.min(st.p + cap * STEP_MARGIN * dt + 1, maxP);
   if (stunned) hi = Math.min(hi, st.p + STUN_DRIFT * dt);   // aturdido: sin avance (solo deriva minima)
   const lo = Math.max(st.p - BACK_RATE * dt - 1, -1);
@@ -279,8 +284,27 @@ function sanitizeData(v, depth = 0) {
 
 // Easter egg: quien se llame "ale" tiene KIRK infinitos (usesLeft = 999 = infinito para el cliente).
 const kirkInf = p => String(p.nick || '').trim().toLowerCase() === 'ale';
-const kirkLeft = p => kirkInf(p) ? 999 : Math.max(0, C.UFO_PER_RACE - (p.ufoUsed || 0));
-function cangriState(p) { return { t: 'cangriState', usesLeft: Math.max(0, C.CANGRI_PER_RACE - (p.cangriUsed || 0)), cooldownUntil: p.cangriNext || 0, serverNow: now() }; }
+const kirkLeft = p => kirkInf(p) || modInf(p) ? 999 : Math.max(0, C.UFO_PER_RACE - (p.ufoUsed || 0));
+// ---- mod menu (Alt+T en el cliente, abierto a cualquiera): la lista de quien tiene cheats activos
+// (nombre en rojo + MODO EPSTEIN) solo se envia a quienes tienen cheats activos; a los demas no les llega nada.
+const MOD_SPEED_MAX = 2.5;
+const modOf = p => (p && p.modOk && p.mod) || null;
+const modK = p => { const m = modOf(p); return m ? m.speed : 1; };
+const modGod = p => !!(modOf(p) && modOf(p).god);
+const modInf = p => !!(modOf(p) && modOf(p).inf);
+const modBomb = p => !!(modOf(p) && modOf(p).bomb);
+const slotPlayer = slot => { const s = race && race.slots[slot]; return s && s.kind === 'player' ? players.get(s.id) : null; };
+// solo quienes tienen algun cheat ACTIVO ven la lista; al apagarlo todo se le manda una ultima lista vacia
+const modActive = q => { const m = modOf(q); return !!(m && (m.speed > 1 || m.god || m.inf || m.bomb)); };
+function sendModList() {
+  const ids = [...players.values()].filter(modActive).map(q => q.id);
+  for (const q of players.values()) {
+    if (modActive(q)) { send(q.ws, { t: 'modList', ids }); q.modSaw = true; }
+    else if (q.modSaw) { send(q.ws, { t: 'modList', ids: [] }); q.modSaw = false; }
+  }
+}
+const cangriLeft = p => modInf(p) ? 999 : Math.max(0, C.CANGRI_PER_RACE - (p.cangriUsed || 0));
+function cangriState(p) { return { t: 'cangriState', usesLeft: cangriLeft(p), cooldownUntil: p.cangriNext || 0, serverNow: now() }; }
 function kirkState(p) { return { t: 'kirkState', usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext || 0, serverNow: now() }; }
 
 // ---------- carrera ----------
@@ -298,15 +322,20 @@ function maybeStart(force) {
   const t0 = now();
   const cd = list.length === 1 ? SOLO_COUNTDOWN_MS : COUNTDOWN_MS;
   race = { seed: crypto.randomInt(1, 2 ** 31), startAt: t0 + cd, slots, finishes: [], done: new Set(), bots: new Map(), timer: null, graceTimer: null, boxes: genBoxes(0), botItems: new Map(), lastAct: new Map(), timers: new Set() };
-  race.boxes = genBoxes(race.seed).map(b => ({ ...b, active: true, kind: randomKind() }));
+  race.boxes = genBoxes(race.seed).map(b => ({ ...b, active: true }));
   race.bumpAt = new Map(); race.traps = []; race.nextTrap = 0;
+  // bomba atomica: como mucho 1 por carrera, en la N-esima caja recogida (al azar 3..12). DUCK_NUKE_N fuerza N (0 = nunca);
+  // con DUCK_ITEM (modo test) no hay bomba salvo que se pida con DUCK_NUKE_N.
+  const nN = Number(process.env.DUCK_NUKE_N);
+  race.pickN = 0; race.nuke = null;
+  race.nukeN = Number.isInteger(nN) && nN >= 0 ? nN : (process.env.DUCK_ITEM ? 0 : 3 + crypto.randomInt(10));
   race.ramps = genRamps(race.seed, race.boxes);
   for (const p of list) p.mv = newMove(race.startAt);
   for (const s of slots) if (s.kind === 'bot') race.bots.set(s.slot, newMove(race.startAt));
   for (const p of list) { p.clips = 0; }
   hostClips = 0;
   phase = 'countdown';
-  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x, kind }) => ({ id, p, x, kind })), ramps: race.ramps, traps: [] });
+  broadcast({ t: 'start', seed: race.seed, startAt: race.startAt, serverNow: t0, slots, hostId, boxes: race.boxes.map(({ id, p, x }) => ({ id, p, x })), ramps: race.ramps, traps: [] });
   broadcast(lobbyMsg());
   pickSong('race');
   for (const p of list) { send(p.ws, kirkState(p)); send(p.ws, cangriState(p)); }
@@ -330,7 +359,19 @@ function recordFinish(slot) {
 function tryFinishPlayer(p) {
   if (!race || phase !== 'race' || !p.inRace || p.dnf || !p.wantFinish || race.done.has(p.slot)) return;
   const el = (now() - race.startAt) / 1000;
-  if (p.mv.p >= C.LENGTH - TOL_FINISH && el >= C.LENGTH / C.MAX_SPEED) recordFinish(p.slot);
+  if (p.mv.p >= C.LENGTH - TOL_FINISH && el >= C.LENGTH / (C.MAX_SPEED * C.DRAFT_BOOST * (p.modOk ? MOD_SPEED_MAX : 1))) recordFinish(p.slot);
+}
+// rebufo: algun pato (jugador o bot) justo delante en la misma linea; holgura por el retraso de las posiciones
+const DRAFT_GRACE_MS = 1500;
+function inDraft(p) {
+  const me = p.mv;
+  for (const s of race.slots) {
+    if (s.slot === p.slot || race.done.has(s.slot)) continue;
+    const mv = slotPos(s.slot); if (!mv || !mv.init) continue;
+    const dp = mv.p - me.p;
+    if (dp > 0.5 && dp < C.DRAFT_DP + 3 && Math.abs(mv.x - me.x) < C.DRAFT_DX + 1.2) return true;
+  }
+  return false;
 }
 function tryFinishBot(slot) {
   const b = race.bots.get(slot);
@@ -414,7 +455,12 @@ function onMessage(p, m) {
       const raw = { p: num(m.p, -1e6, 1e6), x: num(m.x, -1e6, 1e6), vp: num(m.vp, -1e6, 1e6), vx: num(m.vx, -1e6, 1e6) };
       if (raw.p === null || raw.x === null || raw.vp === null || raw.vx === null) return;
       const prevP = p.mv.p;
-      if (applyMove(p.mv, raw, C.MAX_SPEED, race.startAt, now())) p.clips++;
+      if (inDraft(p)) p.mv.draftUntil = now() + DRAFT_GRACE_MS;   // rebufo validado con posiciones saneadas (con holgura)
+      // mod y rebufo: tope x k; la envolvente crece con el tiempo pasado a mayor velocidad
+      const mk = modK(p), dk = now() < (p.mv.draftUntil || 0) ? C.DRAFT_BOOST : 1, dtS = clamp((now() - p.mv.tp) / 1000, 0, 1);
+      if (dk > 1) p.mv.envBonus = (p.mv.envBonus || 0) + (dk - 1) * dtS;   // solo el tiempo pasado en rebufo
+      if (mk > 1) p.mv.envBonus = (p.mv.envBonus || 0) + (mk - 1) * dtS;
+      if (applyMove(p.mv, raw, C.MAX_SPEED * mk * dk, race.startAt, now(), C.MAX_SPEED * mk)) p.clips++;
       checkRamps(p.mv, prevP, p.slot, now());
       tryFinishPlayer(p);
       return;
@@ -444,10 +490,10 @@ function onMessage(p, m) {
     case 'kirk': {      // codigo secreto: OVNI (impulso al autor + laser que aturde a los demas), 1 vez por carrera
       if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
       const tn = now();
-      if ((!kirkInf(p) && (p.ufoUsed || 0) >= C.UFO_PER_RACE) || tn < (p.ufoNext || 0) || tn < (p.mv.stunUntil || 0)) {   // sin usos, en cooldown o aturdido
+      if ((!kirkInf(p) && !modInf(p) && (p.ufoUsed || 0) >= C.UFO_PER_RACE) || (!modInf(p) && tn < (p.ufoNext || 0)) || tn < (p.mv.stunUntil || 0)) {   // sin usos, en cooldown o aturdido
         const k = kirkState(p); return send(p.ws, { t: 'kirkNo', usesLeft: k.usesLeft, cooldownUntil: k.cooldownUntil, serverNow: k.serverNow });
       }
-      p.ufoUsed = (p.ufoUsed || 0) + 1; p.ufoNext = tn + C.UFO_COOLDOWN_S * 1000;
+      p.ufoUsed = (p.ufoUsed || 0) + 1; p.ufoNext = modInf(p) ? 0 : tn + C.UFO_COOLDOWN_S * 1000;
       p.mv.ufoUntil = tn + C.UFO_BOOST_S * 1000;
       p.mv.envBonus = (p.mv.envBonus || 0) + (C.UFO_BOOST - 1) * C.UFO_BOOST_S;
       broadcast({ t: 'ufo', from: p.slot, id: p.id, serverNow: tn, boostUntil: p.mv.ufoUntil, stunUntil: tn + C.UFO_STUN_S * 1000, usesLeft: kirkLeft(p), cooldownUntil: p.ufoNext });
@@ -458,14 +504,28 @@ function onMessage(p, m) {
     case 'cangri': {    // easter egg C-A-N-G-R-I: foto + stun de 1 s a todos menos al autor; 2 usos por carrera, cooldown 15 s
       if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
       const tn = now();
-      if ((p.cangriUsed || 0) >= C.CANGRI_PER_RACE || tn < (p.cangriNext || 0) || tn < (p.mv.stunUntil || 0)) {
+      if ((!modInf(p) && ((p.cangriUsed || 0) >= C.CANGRI_PER_RACE || tn < (p.cangriNext || 0))) || tn < (p.mv.stunUntil || 0)) {
         const k = cangriState(p); return send(p.ws, { t: 'cangriNo', usesLeft: k.usesLeft, cooldownUntil: k.cooldownUntil, serverNow: k.serverNow });
       }
-      p.cangriUsed = (p.cangriUsed || 0) + 1; p.cangriNext = tn + C.CANGRI_COOLDOWN_S * 1000;
-      broadcast({ t: 'cangri', from: p.slot, id: p.id, serverNow: tn, flashMs: C.CANGRI_FLASH_MS, usesLeft: C.CANGRI_PER_RACE - p.cangriUsed, cooldownUntil: p.cangriNext });
+      p.cangriUsed = (p.cangriUsed || 0) + 1; p.cangriNext = modInf(p) ? 0 : tn + C.CANGRI_COOLDOWN_S * 1000;
+      broadcast({ t: 'cangri', from: p.slot, id: p.id, serverNow: tn, flashMs: C.CANGRI_FLASH_MS, usesLeft: cangriLeft(p), cooldownUntil: p.cangriNext });
       for (const s of race.slots) if (s.slot !== p.slot) tryStun(s.slot, tn, C.CANGRI_STUN_S * 1000);   // respeta inmunidad, aire y gigante
       send(p.ws, cangriState(p));
       return;
+    }
+    case 'mod': {       // mod menu: cada cheat se activa/desactiva por separado
+      if (!lobbyOk(p)) return;
+      p.modOk = true;
+      p.mod = { speed: num(m.speed, 1, MOD_SPEED_MAX) ?? 1, god: m.god === true, inf: m.inf === true, bomb: m.bomb === true };
+      send(p.ws, { t: 'modOk', speedMax: MOD_SPEED_MAX });
+      sendModList();
+      if (race && p.inRace) { send(p.ws, kirkState(p)); send(p.ws, cangriState(p)); }
+      return;
+    }
+    case 'nuke': {      // mod menu: bomba atomica infinita (tecla B); una cuenta atras a la vez
+      if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
+      if (!modBomb(p) || now() < (race.nukeLive || 0) || now() < (p.mv.stunUntil || 0)) return;
+      return startNuke(p.slot);
     }
     case 'hop': {       // salto con espacio (mantener = planear). Sin impulso ni inmunidad: solo se valida cooldown y se relaya
       if (!race || phase !== 'race' || now() < race.startAt || !p.inRace || p.dnf || !p.mv || !p.mv.init || race.done.has(p.slot)) return;
@@ -533,11 +593,55 @@ function onPickup(p, m) {
   if (Math.abs(a.mv.p - b.p) >= BOX_DP || Math.abs(a.mv.x - b.x) >= BOX_DX) return;   // posicion validada por el servidor
   if (getItem(a)) return sendItem(a, getItem(a), true);   // el cliente cree que no lleva item: se lo devolvemos
   b.active = false;
-  const kind = b.kind;   // el item es exactamente el kind visible de la caja
+  if (!race.nuke && now() >= (race.nukeLive || 0) && ++race.pickN === race.nukeN) {   // la bomba no se guarda: se activa sola
+    broadcast({ t: 'boxTaken', box: b.id, slot: a.slot });
+    schedule(race, BOX_RESPAWN_MS, () => { b.active = true; broadcast({ t: 'boxBack', box: b.id }); });
+    race.nuke = true;   // la de caja: como mucho 1 por carrera
+    return startNuke(a.slot);
+  }
+  const kind = randomKind();   // cajas misteriosas: el item se sortea al recogerla (nadie sabe que trae)
   setItem(a, kind);
   sendItem(a, kind);
   broadcast({ t: 'boxTaken', box: b.id, slot: a.slot });
-  schedule(race, BOX_RESPAWN_MS, () => { b.active = true; b.kind = randomKind(); broadcast({ t: 'boxBack', box: b.id, kind: b.kind }); });
+  schedule(race, BOX_RESPAWN_MS, () => { b.active = true; broadcast({ t: 'boxBack', box: b.id }); });
+}
+// ---------- bomba atomica: a los NUKE_DELAY_S el que la recogio intercambia posicion con el 1er lugar ----------
+function startNuke(slot) {
+  const tn = now(), at = tn + C.NUKE_DELAY_S * 1000;
+  race.nukeLive = at + 500;   // no se solapan dos cuentas atras
+  broadcast({ t: 'nuke', from: slot, id: race.slots[slot].id, at, serverNow: tn });
+  schedule(race, at - tn, () => nukeBoom(slot));
+}
+function nukeBoom(from) {
+  const tn = now(), fm = slotPos(from);
+  let leader = null, lp = -Infinity;
+  if (fm && fm.init && !race.done.has(from)) {
+    for (const s of race.slots) {   // 1er lugar en carrera; inmunes (gigante o mod invulnerable) no se dejan robar
+      if (s.slot === from || race.done.has(s.slot)) continue;
+      const mv = slotPos(s.slot);
+      if (!mv || !mv.init || tn < (mv.giantUntil || 0) || modGod(slotPlayer(s.slot))) continue;
+      if (mv.p > lp) { lp = mv.p; leader = s.slot; }
+    }
+    if (leader !== null && lp <= fm.p) leader = null;   // ya va primero: no hay nada que robar
+  }
+  const out = { t: 'nukeBoom', from, leader, serverNow: tn };
+  if (leader !== null) {
+    const lm = slotPos(leader);
+    [fm.p, lm.p] = [lm.p, fm.p]; [fm.x, lm.x] = [lm.x, fm.x];
+    for (const [slot, mv] of [[from, fm], [leader, lm]]) {
+      // la envolvente debe admitir la nueva p (el que avanza puede haber perdido tiempo aturdido)
+      const cap = (race.slots[slot].kind === 'bot' ? C.BOT_CAP : C.MAX_SPEED * modK(slotPlayer(slot))) * ENV_MARGIN;
+      const have = Math.max(0, (tn - race.startAt) / 1000 - (mv.stunLost || 0) + (mv.envBonus || 0));
+      if (mv.p > cap * have) mv.envBonus = (mv.envBonus || 0) + mv.p / cap - have + 1;
+      mv.tp = tn;
+      for (const tr of race.traps) tr.lastP.set(slot, mv.p);   // el teletransporte no pisa donas
+    }
+    out.a = { slot: from, p: r2(fm.p), x: r2(fm.x) }; out.b = { slot: leader, p: r2(lm.p), x: r2(lm.x) };
+  }
+  // onda expansiva: conmociona a todos menos al que la lanzo (tryStun respeta aire, gigante, invulnerable e inmunidad)
+  out.dazed = race.slots.filter(s => s.slot !== from && tryStun(s.slot, tn, C.NUKE_STUN_S * 1000)).map(s => s.slot);
+  out.dizzyUntil = tn + (C.NUKE_STUN_S + C.NUKE_DIZZY_S) * 1000;
+  broadcast(out);
 }
 function slotPos(slot) {
   const s = race.slots[slot];
@@ -549,6 +653,7 @@ function slotPos(slot) {
 function tryStun(slot, tn, ms = STUN_MS) {
   const mv = slotPos(slot);
   if (!mv || !mv.init || race.done.has(slot) || tn < (mv.immuneUntil || 0) || tn < (mv.stunUntil || 0) || tn < (mv.airUntil || 0) || tn < (mv.giantUntil || 0)) return false;
+  if (modGod(slotPlayer(slot))) return false;   // mod: invulnerable
   mv.stunUntil = tn + ms; mv.immuneUntil = mv.stunUntil + IMMUNE_MS; mv.stunLost = (mv.stunLost || 0) + ms / 1000;
   broadcast({ t: 'stun', slot, id: race.slots[slot].id, until: mv.stunUntil, serverNow: tn });
   return true;
@@ -591,14 +696,14 @@ function checkTraps(tn) {
       if (!mv || !mv.init) continue;
       const prev = tr.lastP.get(s.slot) ?? mv.p; tr.lastP.set(s.slot, mv.p);
       if (s.slot === tr.by && tn < tr.armAt) continue;                      // el autor no la activa durante 1.5 s
-      if (tn < (mv.airUntil || 0) || tn < (mv.giantUntil || 0)) continue;   // por encima / gigantes: ni la activan ni se consume
+      if (tn < (mv.airUntil || 0) || tn < (mv.giantUntil || 0) || modGod(slotPlayer(s.slot))) continue;   // por encima / gigantes / mod invulnerable: ni la activan ni se consume
       const lo = Math.min(prev, mv.p) - C.DONUT_R_P, hi = Math.max(prev, mv.p) + C.DONUT_R_P;
       if (tr.p < lo || tr.p > hi || Math.abs(mv.x - tr.x) > C.DONUT_R_X) continue;
       const splash = [];
       for (const o of race.slots) {
         if (o.slot === s.slot || race.done.has(o.slot)) continue;
         const om = slotPos(o.slot);
-        if (!om || !om.init || tn < (om.giantUntil || 0) || tn < (om.airUntil || 0)) continue;
+        if (!om || !om.init || tn < (om.giantUntil || 0) || tn < (om.airUntil || 0) || modGod(slotPlayer(o.slot))) continue;
         if (Math.hypot(om.p - tr.p, om.x - tr.x) <= C.DONUT_SPLASH_R) splash.push({ slot: o.slot, until: tn + C.DONUT_SPLASH_S * 1000 });
       }
       broadcast({ t: 'donut', id: tr.id, target: s.slot, p: tr.p, x: tr.x, serverNow: tn, blindUntil: tn + C.DONUT_BLIND_S * 1000, splash });
@@ -695,6 +800,7 @@ function onLeave(p) {
   if (p.hello) {
     broadcast({ t: 'left', id: p.id });
     if (p.id === hostId) { hostId = null; pickHost(); }
+    if (p.modOk) sendModList();
     if (race && p.inRace) { p.dnf = true; if (phase !== 'results') checkEnd(); }
     if (players.size === 0) { backToLobby(); return; }
     sendLobby();

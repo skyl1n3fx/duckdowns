@@ -87,14 +87,14 @@ const mv=()=>{im.style.right='auto';im.style.left=Math.random()*Math.max(0,inner
 im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})();
 </script>
 <div id="pos" class="hud">1º<small>/8</small></div>
-<div id="kps" class="hud">teclas/seg<b id="kpsv">0.0</b><div id="kbar"><div id="kfill"></div></div></div>
+<div id="kps" class="hud">velocidad<b id="kpsv">0</b><div id="kbar"><div id="kfill"></div></div></div>
 <div id="prog" class="hud"></div>
 <div id="count" class="hud"></div>
 <div id="msg" class="hud"></div>
 <div id="lookBack" class="hud hide">👀 Mirando atrás</div>
 <div id="start" class="ov">
 <h1>Carrera de Patos de Hule</h1>
-<p>Machaca la <b>W</b> lo más rápido que puedas para nadar (mantenerla apretada no cuenta). <b>Espacio</b> salta; mantenlo apretado para planear. El <b>mouse</b> mueve tu pato a izquierda y derecha. Esquiva remolinos, ramas, sapos y nenúfares.<br><b>Solo el 1º, 2º y 3º se salvan: a los demás les cae un meteorito.</b></p>
+<p>Mantén apretada la <b>W</b> para nadar: aceleras poco a poco hasta la velocidad máxima, y si chocas la pierdes. Pégate detrás de otro pato para tomar su <b>rebufo</b> y adelantarlo. <b>Espacio</b> salta; mantenlo apretado para planear. El <b>mouse</b> mueve tu pato a izquierda y derecha. Esquiva remolinos, ramas, sapos y nenúfares.<br><b>Solo el 1º, 2º y 3º se salvan: a los demás les cae un meteorito.</b></p>
 <div class="lob">
 <div id="sw"></div>
 <input id="nick" maxlength="14" placeholder="Tu nombre" autocomplete="off" spellcheck="false">
@@ -110,6 +110,8 @@ im.addEventListener('animationiteration',mv);im.addEventListener('load',mv);})()
 <script src="powerups.js"></script>
 <script src="rampas.js"></script>
 <script src="ovni.js"></script>
+<script src="modmenu.js"></script>
+<script src="nuke.js"></script>
 <script>
 'use strict';
 /* ===== AUDIO: todo suena a hule ===== */
@@ -173,11 +175,13 @@ const CFG={
   LENGTH:1200,         // largo del rio (unidades) a lo largo de la curva; sobrescrito por welcome.consts
   HALF_W:11,           // semiancho navegable
   WINDOW:1.0,          // ventana (s) para medir teclas/seg
-  PUSH:1.0,            // empuje por pulsacion (menor = mas dificil)
+  ACCEL_K:0.5,         // manteniendo W: la velocidad se acerca al tope a este ritmo (1/s): ~63% a los 2 s, ~95% a los 6 s
+  CRASH_K:0.4,         // al chocar (rama, sapo, otro pato) la velocidad se multiplica por esto
+  DRAFT_DP:9,DRAFT_DX:1.8,DRAFT_BOOST:1.15,   // rebufo: pato delante a <9 u y <1.8 u de lado -> tope x1.15 (lo valida el servidor)
   DRAG:0.55,           // friccion lineal del agua
   CURRENT:3.2,         // corriente en contra (u/s)
   MAX_SPEED:15,        // tope de velocidad
-  KPS_FULL:11,         // teclas/seg para barra llena
+  KPS_FULL:5,          // W/seg para barra llena
   BOT_MIN:10.8, BOT_MAX:14.2, // velocidad crucero de bots
   BOT_RUBBER:0.12,BOT_CAP:16.3, // BOT_MAX*(1+BOT_RUBBER)+0.6 del servidor menos margen;     // bonus maximo de velocidad de bots rezagados (a 60u del jugador); nunca frenan por ir adelante
   NBOTS:7,
@@ -547,20 +551,27 @@ function offlineSpec(){const a=[],free=PALETTE.filter(c=>c!==net.color);for(let 
 function recolor(r){if(r.duck.col===r.color)return;r.duck.col=r.color;const m=rubberMat(r.color);for(let i=0;i<r.duck.tint.length;i++)r.duck.tint[i].material=m;}
 // nick flotante: sprite canvas por pato (se redibuja solo si cambia el texto)
 function setLabel(r){
-  const txt=r.name+(r.isPlayer?'|me':'')+(r.badge||'');
+  const ep=!!(window.DuckMod&&DuckMod.tagged(r));   // mod menu: MODO EPSTEIN (solo lo ve quien tiene el mod)
+  const txt=r.name+(r.isPlayer?'|me':'')+(r.badge||'')+(ep?'|ep':'');
   if(r.lab&&r.labTxt===txt)return;
   r.labTxt=txt;
   if(!r.lab){const cv=document.createElement('canvas');cv.width=256;cv.height=64;const tex=new THREE.CanvasTexture(cv);tex.minFilter=THREE.LinearFilter;
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,opacity:0.78,depthWrite:false}));sp.scale.set(1.8,0.45,1);sp.position.y=3.1;sp.renderOrder=10;r.duck.root.add(sp);r.lab=sp;}
   const cv=r.lab.material.map.image,g=cv.getContext('2d');g.clearRect(0,0,256,64);
-  g.fillStyle=r.isPlayer?'rgba(255,200,0,.92)':'rgba(20,30,60,.62)';
+  g.fillStyle=ep?'rgba(50,0,8,.88)':r.isPlayer?'rgba(255,200,0,.92)':'rgba(20,30,60,.62)';   // MODO EPSTEIN: nombre en rojo
   g.beginPath();g.roundRect?g.roundRect(4,8,248,48,24):g.rect(4,8,248,48);g.fill();
-  g.lineWidth=4;g.strokeStyle=r.isPlayer?'#fff':'rgba(255,255,255,.7)';g.stroke();
+  g.lineWidth=4;g.strokeStyle=ep?'#ff2d3d':r.isPlayer?'#fff':'rgba(255,255,255,.7)';g.stroke();
   g.font='700 30px Fredoka,Trebuchet MS,sans-serif';g.textAlign='center';g.textBaseline='middle';
-  g.fillStyle=r.isPlayer?'#7c2d12':'#fff';
+  g.fillStyle=ep?'#ff3b4b':r.isPlayer?'#7c2d12':'#fff';
   g.fillText((r.isPlayer?'\u25BC ':'')+(r.badge||'')+r.name,128,33,230);
   r.lab.material.map.needsUpdate=true;
+  if(ep&&!r.epLab){const c2=document.createElement('canvas');c2.width=256;c2.height=48;const x=c2.getContext('2d');
+    x.font='900 30px Fredoka,Trebuchet MS,sans-serif';x.textAlign='center';x.textBaseline='middle';x.lineWidth=6;x.strokeStyle='#3a0006';x.strokeText('MODO EPSTEIN',128,25);x.fillStyle='#ff2d3d';x.fillText('MODO EPSTEIN',128,25);
+    const t2=new THREE.CanvasTexture(c2);t2.minFilter=THREE.LinearFilter;
+    r.epLab=new THREE.Sprite(new THREE.SpriteMaterial({map:t2,transparent:true,depthWrite:false}));r.epLab.scale.set(1,0.75,1);r.epLab.position.y=0.95;r.epLab.renderOrder=11;r.lab.add(r.epLab);}
+  if(r.epLab)r.epLab.visible=ep;
 }
+window.__modRefresh=()=>{for(const r of racers)setLabel(r);if(game.state==='menu')renderLobby();};
 function resetRace(spec){
   spec=spec||offlineSpec();
   const n=spec.length;
@@ -570,7 +581,7 @@ function resetRace(spec){
     const r=racers[i],sp=spec[i];
     r.p=0;r.vp=0;r.vx=0;r.kick=0;r.finished=false;r.dead=false;r.fTime=0;r.stun=0;r.spin=0;r.cd=0;r.dcd=0;r.inWhirl=false;r.seenId=-1;r.dodgeX=null;r.sx=1;
     r.kind=sp.kind;r.id=sp.id;r.bi=sp.bi;r.isPlayer=sp.kind==='me';r.name=sp.nick;r.color=sp.color;
-    r.slot=sp.lane;r.nick=sp.nick;r.stunUntil=0;r.airUntil=0;r.boostUntil=0;r.giantUntil=0;r.giantScale=1;r.hopT0=r.hopUntil=r.hopNext=r.hopPred=0;r.item=null;r.wasAir=false;r.x=((sp.lane-(n-1)/2)/(n-1))*(CFG.HALF_W*1.5);r.tx=r.x;r.score=0;r.tp=0;r.tpx=r.x;r.tvp=0;r.tAge=0;
+    r.slot=sp.lane;r.nick=sp.nick;r.stunUntil=0;r.airUntil=0;r.boostUntil=0;r.giantUntil=0;r.giantScale=1;r.hopT0=r.hopUntil=r.hopNext=r.hopPred=0;r.draft=0;r.item=null;r.wasAir=false;r.x=((sp.lane-(n-1)/2)/(n-1))*(CFG.HALF_W*1.5);r.tx=r.x;r.score=0;r.tp=0;r.tpx=r.x;r.tvp=0;r.tAge=0;
     r.duck.root.visible=true;r.duck.root.scale.setScalar(1);r.duck.root.position.set(r.x,0,0);r.duck.root.rotation.set(0,0,0);r.duck.bob.rotation.set(0,0,0);
     recolor(r);setLabel(r);
     if(!r.isPlayer){const q=Math.random();r.cruise=CFG.BOT_MIN+(CFG.BOT_MAX-CFG.BOT_MIN)*q;r.skill=0.72+0.26*Math.random();}
@@ -590,12 +601,18 @@ function onKey(e){
   if(e.repeat||game.state!=='race'||!player||player.finished||player.dead)return;
   if(Date.now()+(game.online?net.offset:0)<player.stunUntil)return;
   if(e.code==='Space'){hopPress();return;}
-  if(e.code!=='KeyW'&&e.key!=='w'&&e.key!=='W')return;   // solo la W hace nadar
-  const now=performance.now()/1000;
-  keyTimes[keyN++&63]=now;
-  const f=Math.min(kps/CFG.KPS_FULL,1);
-  if(player.stun<=0)player.vp+=CFG.PUSH*(0.8+0.3*f);
-  player.flap=1;pressPulse=1;
+  if(e.code!=='KeyW'&&e.key!=='w'&&e.key!=='W')return;   // solo la W hace nadar (mantenida: ver stepRacer)
+  wHeld=true;pressPulse=1;
+}
+let wHeld=false;   // W mantenida = acelera progresivamente
+addEventListener('keydown',e=>{if(e.code==='KeyW'&&!(e.target&&e.target.tagName==='INPUT'))wHeld=true;});
+addEventListener('keyup',e=>{if(e.code==='KeyW')wHeld=false;});
+addEventListener('blur',()=>{wHeld=false;});
+// rebufo: otro pato justo delante y en la misma linea -> r.draft sube hacia 1 (decae al salir)
+function draftTarget(r){
+  for(let i=0;i<racers.length;i++){const q=racers[i];if(q===r||q.dead||q.finished)continue;
+    const dp=q.p-r.p;if(dp>1.2&&dp<CFG.DRAFT_DP&&Math.abs(q.x-r.x)<CFG.DRAFT_DX)return q;}
+  return null;
 }
 // salto con espacio: el servidor valida (cooldown) y relaya 'hop'; online se predice y se cancela si no llega
 function hopOn(r){return NOW<r.hopUntil;}
@@ -667,7 +684,7 @@ function stepRacer(r,dt,t,racing){
   if(BOOSTK>1&&racing&&!r.finished&&NOW>=r.stunUntil&&isSim(r))r.vp+=(CFG.MAX_SPEED*BOOSTK-r.vp)*Math.min(1,dt*2.5);
   r.cd-=dt;r.dcd-=dt;r.stun-=dt;r.spin=Math.max(0,r.spin-dt);
   let targetX;
-  if(r.isPlayer){targetX=mouseNX*(CFG.HALF_W-1.2);}
+  if(r.isPlayer){targetX=mouseNX*(CFG.HALF_W-1.2);if(NOW<(r.dizzyUntil||0))targetX+=Math.sin(t*2.6)*4.5*Math.min(1,(r.dizzyUntil-NOW)/1500);}   // mareo (bomba): direccion torpe
   else{botSteer(r,t,dt);targetX=r.tx;}
   if(r.finished){targetX=r.x*0.98;}
   if(!racing){ // cuenta regresiva: quietos
@@ -677,10 +694,18 @@ function stepRacer(r,dt,t,racing){
   }else if(r.finished){
     r.vp*=Math.exp(-0.9*dt);
   }else if(r.isPlayer){
-    r.vp+=(-CFG.CURRENT)*dt;                 // corriente en contra
-    r.vp-=CFG.DRAG*r.vp*dt;                  // friccion
+    const MK=window.DuckMod?DuckMod.speedK():1;   // mod menu: velocidad maxima
+    const dq=draftTarget(r);r.draft=Math.max(0,Math.min(1,(r.draft||0)+(dq?dt*1.6:-dt*1.2)));
+    const DK=1+(CFG.DRAFT_BOOST-1)*r.draft,top=CFG.MAX_SPEED*AIRK*MK*DK;
+    if(wHeld&&r.stun<=0){                    // W mantenida: se acerca al tope poco a poco (mas rapido en rebufo)
+      r.vp+=(top-r.vp)*Math.min(1,CFG.ACCEL_K*(1+r.draft*0.8)*dt);r.flap=1;
+    }else{
+      r.vp+=(-CFG.CURRENT)*dt;               // corriente en contra
+      r.vp-=CFG.DRAG*r.vp*dt;                // friccion
+    }
     if(r.vp<-2.5)r.vp=-2.5;
-    if(r.vp>CFG.MAX_SPEED*AIRK)r.vp=CFG.MAX_SPEED*AIRK;
+    if(r.vp>top)r.vp=top;
+    if(r.draft>0.5&&dq&&Math.random()<dt*25){W(r.p,r.x);emit(WX+(Math.random()-0.5)*1.2,0.5+Math.random()*0.6,WZ,(Math.random()-0.5)*0.5,0.2,(Math.random()-0.5)*0.5,0xe0f6ff,0.12,0.45,0);}   // estelas de viento
   }else{
     const burstK=1+0.14*Math.sin(t*0.9+r.phase)+0.06*Math.sin(t*2.3+r.phase*2);
     const lag=player?player.p-r.p:0,rb=lag>0?1+Math.min(1,lag/60)*CFG.BOT_RUBBER:1;
@@ -726,7 +751,7 @@ function obstacleFx(r,dt,prevP){
       const dist=Math.sqrt(dx*dx+dp*dp);
       if(dist<o.rad+r.r&&r.cd<=0&&!o.jump){
         r.cd=0.6;const s=dx>=0?1:-1;
-        r.kick+=s*11;r.vp*=0.55;r.stun=0.3;r.spin=Math.max(r.spin,0.45);
+        r.kick+=s*11;r.vp*=CFG.CRASH_K;r.stun=0.3;r.spin=Math.max(r.spin,0.45);
         if(r.isPlayer||Math.abs(r.p-player.p)<40){audio.croak();audio.squeak(1,'squeeze',0.8);}
         W(r.p,r.x);burst(WX,0.6,WZ,10,4,0x6ccf2f,0.45,0.6,12,3);ring(WX,WZ,0x6ccf2f);
       }
@@ -741,9 +766,9 @@ function obstacleFx(r,dt,prevP){
   r.inWhirl=inW;
 }
 function duckCollisions(){
-  const n=racers.length;
+  const n=racers.length,god=window.DuckMod&&DuckMod.god();
   for(let a=0;a<n;a++){const A=racers[a];if(A.dead)continue;
-    for(let b=a+1;b<n;b++){const B=racers[b];if(B.dead||NOW<A.airUntil||NOW<B.airUntil||NOW<A.giantUntil||NOW<B.giantUntil||hopOn(A)||hopOn(B))continue;
+    for(let b=a+1;b<n;b++){const B=racers[b];if(B.dead||NOW<A.airUntil||NOW<B.airUntil||NOW<A.giantUntil||NOW<B.giantUntil||hopOn(A)||hopOn(B)||(god&&(A.isPlayer||B.isPlayer)))continue;
       const dp=B.p-A.p,dx=B.x-A.x;if(dp>1.9||dp<-1.9||dx>1.9||dx<-1.9)continue;
       const d2=dx*dx+dp*dp,rr=A.r+B.r;
       if(d2>=rr*rr||d2<1e-6)continue;
@@ -754,6 +779,7 @@ function duckCollisions(){
         const j=-(1+0.75)*rv*0.5;
         A.vp-=np*j;B.vp+=np*j;A.kick-=nx*j*1.2;B.kick+=nx*j*1.2;
         if(A.dcd<=0&&B.dcd<=0){
+          if(Math.abs(rv)>2){if(isSim(A))A.vp*=CFG.CRASH_K;if(isSim(B))B.vp*=CFG.CRASH_K;}   // choque fuerte: pierden la velocidad punta
           A.dcd=B.dcd=0.3;const it=Math.min(1.4,0.45+Math.abs(rv)*0.12);
           if(A.isPlayer||B.isPlayer||Math.abs(A.p-player.p)<30){audio.squeak(it,'bounce',0.9+Math.random()*0.5);audio.squeak(it*0.7,'squeeze',1.3);}
           W((A.p+B.p)/2,(A.x+B.x)/2);ring(WX,WZ,0xffe14a);
@@ -956,6 +982,7 @@ function renderLobby(){
     const nm=document.createElement('span');nm.className='nm';nm.textContent=(p.id===net.hostId?'\u{1F451} ':'')+p.nick+(p.id===net.id?' (tú)':'');
     const st=document.createElement('span');st.className='st';st.textContent=p.ready?'Listo':'Esperando';
     li.append(dot,nm,st);ul.appendChild(li);
+    if(window.DuckMod&&DuckMod.tagged({id:p.id,isPlayer:p.id===net.id})){nm.style.color='#ff2d3d';const ep=document.createElement('b');ep.textContent='MODO EPSTEIN';ep.style.cssText='color:#ff2d3d;font-size:.75em;margin-left:6px;flex:none';nm.after(ep);}
   }
   net.wait=wait;renderNeed();
   go.textContent=net.ready?'No listo':'¡Listo!';go.classList.toggle('on',net.ready);
@@ -970,7 +997,7 @@ function syncLobbyDucks(){
     const p=net.players[i];
     if(!lobbyDucks[i]){const d=createDuck(p.color||PALETTE[0]);scene.add(d.root);lobbyDucks.push({duck:d,color:0,name:'',isPlayer:false,badge:'',lab:null,labTxt:'',wob:Math.random()*6});}
     const L=lobbyDucks[i];
-    L.color=p.color||PALETTE[0];L.name=p.nick;L.isPlayer=p.id===net.id;L.badge=p.ready?'\u2705 ':'\u23F3 ';
+    L.id=p.id;L.color=p.color||PALETTE[0];L.name=p.nick;L.isPlayer=p.id===net.id;L.badge=p.ready?'\u2705 ':'\u23F3 ';
     L.duck.root.position.x=(i-(n-1)/2)*2.4;L.duck.root.position.z=1.5;L.duck.root.position.y=0;
     L.duck.root.rotation.set(0,0,0);
     recolor(L);setLabel(L);L.lab.visible=true;L.lab.scale.set(3.2,0.8,1);L.lab.position.y=3.0;
@@ -1064,7 +1091,7 @@ function applyConsts(c){
   if(ok(c.BOT_MAX)){CFG.BOT_MAX=c.BOT_MAX;CFG.BOT_MIN=c.BOT_MAX-3.4;}
   if(ok(c.BOT_RUBBER))CFG.BOT_RUBBER=c.BOT_RUBBER;
   if(ok(c.BOT_CAP))CFG.BOT_CAP=c.BOT_CAP-0.2;
-  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','UFO_PER_RACE','UFO_COOLDOWN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG','HOP_S','HOP_MIN_S','HOP_FALL_S','HOP_CD_S'])if(ok(c[k]))CFG[k]=c[k];
+  for(const k of ['UFO_BOOST','UFO_BOOST_S','UFO_STUN_S','UFO_PER_RACE','UFO_COOLDOWN_S','JUMP_S','JUMP_BOOST','SHOUT_N','STUN_S','IMMUNE_S','BOX_RESPAWN_S','BOT_AVG','DRAFT_DP','DRAFT_DX','DRAFT_BOOST','NUKE_DELAY_S','NUKE_STUN_S','NUKE_DIZZY_S','HOP_S','HOP_MIN_S','HOP_FALL_S','HOP_CD_S'])if(ok(c[k]))CFG[k]=c[k];
   if(rebuild&&game.state==='menu'){worldLen=-1;buildWorld(CFG.LENGTH);resetRace();buildDots();}
 }
 function onMsg(m){
@@ -1073,6 +1100,7 @@ function onMsg(m){
       applyConsts(m.consts);
       net.id=m.id;net.hostId=m.hostId;if(Array.isArray(m.shareUrls))net.share=m.shareUrls;net.offset=m.serverNow-Date.now();net.phase=m.phase;
       if(m.music)musServer(m.music);
+      if(window.DuckMod)DuckMod.onWelcome();
       if(Array.isArray(m.palette)&&m.palette.length===PALETTE.length)for(let i=0;i<PALETTE.length;i++)PALETTE[i]=m.palette[i];
       for(let i=0;i<PALETTE.length;i++)swBtns[i].style.background=hex(PALETTE[i]);
       break;
@@ -1130,11 +1158,12 @@ let NOW=Date.now();
 const nowMs=()=>Date.now()+(game.online?net.offset:0);
 const duckApi={THREE,scene,camera,audio,consts:CFG,racers,fx,hudRoot:document.body,get me(){return player;},
   trackToWorld(p,x,po,pd){W(p,x);po.set(WX,0,WZ);pd.set(TRK.tx,0,TRK.tz);},
-  send,isOnline:()=>game.online,isSim,rng,emit,burst,ring,flashCharlie,shake(a){if(a>game.shake)game.shake=a;},now:nowMs};
-const MODS=[window.DuckRamps,window.DuckPowerups,window.DuckUfo]; // orden: rampas -> power-ups
+  send,isOnline:()=>game.online,isSim,rng,emit,burst,ring,flashCharlie,shake(a){if(a>game.shake)game.shake=a;},now:nowMs,
+  nukeMap(){for(let i=0;i<obs.length;i++)world.remove(obs[i].mesh);obs.length=0;obsSeed=-1;}};   // bomba atomica: el mapa queda sin obstaculos
+const MODS=[window.DuckRamps,window.DuckPowerups,window.DuckUfo,window.DuckMod,window.DuckNuke]; // orden: rampas -> power-ups
 function modCall(fn,a,b){for(let i=0;i<MODS.length;i++){const m=MODS[i];if(m&&typeof m[fn]==='function'){try{m[fn](a,b);}catch(e){console.error('mod',fn,e);}}}}
 function raceEnded(){fx.camUp=0;fx.camLock=false;fx.shakeX=fx.shakeY=0;modCall('onRaceEnd');}
-const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1,kirkNo:1,kirkState:1,trapAdd:1,trapGone:1,donut:1,cangri:1,cangriState:1,cangriNo:1};
+const NETMODS={item:1,boxTaken:1,boxBack:1,missile:1,miss:1,shout:1,stun:1,jump:1,ufo:1,giant:1,kirkNo:1,kirkState:1,trapAdd:1,trapGone:1,donut:1,cangri:1,cangriState:1,cangriNo:1,modList:1,nuke:1,nukeBoom:1};
 
 /* ===== BUCLE PRINCIPAL ===== */
 const camPos=new THREE.Vector3(0,6,12),camLook=new THREE.Vector3(),goalPos=new THREE.Vector3(),goalLook=new THREE.Vector3();
@@ -1201,8 +1230,8 @@ function updateHud(){
   if(!player)return;
   const txt=rankOf(player)+'º<small>/'+racers.length+'</small>';
   if(txt!==lastPosTxt){elPos.innerHTML=txt;lastPosTxt=txt;}
-  const kt=kps.toFixed(1);
-  if(kt!==lastKpsTxt){elKps.textContent=kt;lastKpsTxt=kt;elKfill.style.width=Math.min(100,kps/CFG.KPS_FULL*100)+'%';}
+  const vv=player?Math.max(0,player.vp):0,kt=Math.round(vv*6)+(player&&player.draft>0.5?' REBUFO':'');   // ~km/h de pato
+  if(kt!==lastKpsTxt){elKps.textContent=kt;lastKpsTxt=kt;elKfill.style.width=Math.min(100,vv/CFG.MAX_SPEED*100)+'%';elKps.style.color=player&&player.draft>0.5?'#7dd3fc':'';}
   for(let i=0;i<racers.length;i++)dots[i].style.left=Math.min(100,racers[i].p/CFG.LENGTH*100)+'%';
 }
 let last=performance.now()/1000,tAcc=0;
@@ -1223,7 +1252,7 @@ function frame(){
   }else if(st==='race'){
     kps=calcKps(now);
     for(let i=0;i<racers.length;i++){const r=racers[i];const pp=r.p;
-      if(isSim(r)){stepRacer(r,dt,t,true);if(NOW>=r.airUntil&&NOW>=r.giantUntil&&!hopOn(r))obstacleFx(r,dt,pp);}else if(!r.dead)interp(r,dt);
+      if(isSim(r)){stepRacer(r,dt,t,true);if(NOW>=r.airUntil&&NOW>=r.giantUntil&&!hopOn(r)&&!(r.isPlayer&&window.DuckMod&&DuckMod.god()))obstacleFx(r,dt,pp);}else if(!r.dead)interp(r,dt);
       if(!r.finished&&r.p>=CFG.LENGTH){r.finished=true;r.fTime=t;game.finCount++;
         if(r.isPlayer){msg(game.finCount<=3?'¡'+game.finCount+'º LUGAR!':'¡Llegaste '+game.finCount+'º!');}
         if(game.online)netFinish(r);

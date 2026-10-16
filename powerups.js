@@ -170,7 +170,15 @@ function iconGroup(kind) {
   g.visible = false;
   return g;
 }
-function setKind(o, k) { o.kind = k; o.baz.visible = k === 'bazooka'; o.meg.visible = k === 'megafono'; o.gig.visible = k === 'gigante'; o.don.visible = k === 'dona'; o.glow.material = G.glowMs[Math.max(0, ITEMS.indexOf(k))]; }
+// cajas misteriosas: nunca se ve que trae (offline o.kind se sortea en secreto; online lo decide el servidor al recogerla)
+function setKind(o, k) { o.kind = k; o.baz.visible = o.meg.visible = o.gig.visible = o.don.visible = false; o.glow.material = G.glowMs[0]; }
+function mysteryMat() {
+  if (G.qMat) return G.qMat;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d');
+  c.font = '900 110px Fredoka,"Trebuchet MS",sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineWidth = 14; c.lineJoin = 'round'; c.strokeStyle = '#1b1230'; c.strokeText('?', 64, 70); c.fillStyle = '#fff04d'; c.fillText('?', 64, 70);
+  return (G.qMat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false }));
+}
 
 /* ---------- cajas: burbuja de jabon con el icono del power-up ---------- */
 function makeBox(b, idx) {
@@ -178,6 +186,7 @@ function makeBox(b, idx) {
   const bub = new T.Mesh(G.sph, G.bubbleMats[idx % 3]); bub.scale.setScalar(0.95); g.add(bub);
   const baz = iconGroup('bazooka'), meg = iconGroup('megafono'), gig = iconGroup('gigante'), don = iconGroup('dona');
   inner.add(baz); inner.add(meg); inner.add(gig); inner.add(don);
+  const q = new T.Sprite(mysteryMat()); q.scale.set(1.1, 1.1, 1); inner.add(q);
   const glow = new T.Sprite(G.glowM); glow.scale.set(2.3, 2.3, 1); glow.position.y = 0; g.add(glow);
   g.add(inner);
   for (let i = 0; i < 3; i++) { // destellos de la burbuja
@@ -542,11 +551,11 @@ function trapTriggersLocal(n) {   // offline: misma regla que el servidor (radio
     const t = trapPool[i]; if (!t.on) continue;
     for (let k = 0; k < R.length; k++) {
       const r = R[k];
-      if (r.finished || r.dead || n < (r.airUntil || 0) || n < (r.giantUntil || 0)) continue;
+      if (r.finished || r.dead || n < (r.airUntil || 0) || n < (r.giantUntil || 0) || modGod(r)) continue;
       if (r.slot === t.owner && n < t.born + 1000) continue;
       if (Math.abs(r.p - t.p) > (api.consts.DONUT_R_P || 1.5) || Math.abs(r.x - t.x) > t.w / 2) continue;
       const sp = [];
-      for (let j = 0; j < R.length; j++) if (R[j] !== r && Math.hypot(R[j].p - t.p, R[j].x - t.x) < 7) sp.push(R[j]);
+      for (let j = 0; j < R.length; j++) if (R[j] !== r && !modGod(R[j]) && Math.hypot(R[j].p - t.p, R[j].x - t.x) < 7) sp.push(R[j]);
       triggerDonut(t, r, sp, 3); break;
     }
   }
@@ -604,8 +613,10 @@ function updShout(dt) {
 }
 
 /* ---------- reglas locales (offline) = mismas que el servidor ---------- */
+const modGod = r => r === api.me && window.DuckMod && window.DuckMod.god();   // mod menu: invulnerable (offline; online lo filtra el servidor)
 function stunLocal(r, n) {
   const pu = puOf(r);
+  if (modGod(r)) return false;
   if (n < (r.giantUntil || 0)) { showPing(r); return false; }
   if (n < pu.immuneUntil || n < (r.stunUntil || 0) || n < (r.airUntil || 0)) return false;
   r.stunUntil = n + STUN_MS; pu.immuneUntil = r.stunUntil + IMMUNE_MS; return true;
@@ -635,6 +646,7 @@ function fireLocal(r, kind) {
 }
 function pickLocal(r, o, n) {
   o.active = false; o.back = n + RESPAWN_MS; boxPop(o);
+  if (window.DuckNuke && window.DuckNuke.offlinePick(r)) return;   // la bomba atomica no se guarda: se activa sola
   r.item = o.kind || ITEMS[(Math.random() * ITEMS.length) | 0]; puOf(r).botAt = n + 1000 + Math.random() * 3500;
   if (r === api.me) snd.pickup();
 }
@@ -715,7 +727,7 @@ function onNet(m) {
   switch (m.t) {
     case 'item': r = bySlot(m.slot); if (r) { r.item = m.kind; puOf(r).botAt = api.now() + 1000 + Math.random() * 3500; if (r === api.me && !m.again) snd.pickup(); } break;
     case 'boxTaken': o = boxes[m.box]; if (o) { o.active = false; boxPop(o); } break;
-    case 'boxBack': o = boxes[m.box]; if (o) { o.active = true; if (m.kind) setKind(o, m.kind); } break;
+    case 'boxBack': o = boxes[m.box]; if (o) o.active = true; break;
     case 'missile': showMissile(bySlot(m.from), m.target == null ? null : bySlot(m.target), m.eta); break;
     case 'shout': r = bySlot(m.from); if (r) showShout(r, 0, 0);
       if (m.targets) for (let i = 0; i < m.targets.length; i++) { const q = bySlot(m.targets[i]); if (q && api.now() < (q.giantUntil || 0)) showPing(q); }

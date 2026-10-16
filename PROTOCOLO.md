@@ -51,15 +51,15 @@ Constantes unicas en `server.js` (`C`), enviadas en `welcome.consts`: `LENGTH=12
 
 ## Power-ups y rampas (fase 3)
 Constantes extra en `welcome.consts`: `JUMP_S=1, JUMP_BOOST=1.25, SHOUT_N=3, STUN_S=2, IMMUNE_S=1, BOX_RESPAWN_S=6`.
-`start` incluye `boxes:[{id,p,x,kind}]` (`kind` = item que dara la caja: `'bazooka'|'megafono'|'gigante'`, elegido al azar por el servidor al generarla y en cada reaparicion; `pickup` entrega exactamente ese `kind`; `boxBack{box,kind}` trae el nuevo) (3 por fila, ~9 filas entre p=60 y LENGTH-40) y `ramps:[{id,p,x,w}]` (una entre cada par de filas, >=20 u de cualquier caja). Los genera el servidor; no hay PRNG compartido.
+`start` incluye `boxes:[{id,p,x}]` (cajas misteriosas: no llevan `kind`; el servidor sortea el item al recogerla y nadie sabe que trae hasta el `item`) (3 por fila, ~9 filas entre p=60 y LENGTH-40) y `ramps:[{id,p,x,w}]` (una entre cada par de filas, >=20 u de cualquier caja). Los genera el servidor; no hay PRNG compartido.
 
 C->S (el `slot` solo lo puede usar el host efectivo, para sus bots; sin `slot` actua el propio jugador; 1 accion cada 150 ms por pato):
 - `pickup{box, slot?}`: valido si la caja esta activa, el pato (posicion VALIDADA) esta a |dp|<2.5 y |dx|<2, y no lleva item. Si lleva item se rechaza en silencio y la caja NO se consume.
 - `fire{slot?}`: solo con item y no aturdido.
 
 S->C:
-- `item{slot, kind:'bazooka'|'megafono'|'gigante'|'dona'}` al dueno (a los bots, al host). `kind` = el de la caja recogida. Maximo 1 item.
-- `boxTaken{box, slot}` a todos; `boxBack{box,kind}` a los 6 s.
+- `item{slot, kind:'bazooka'|'megafono'|'gigante'|'dona'}` al dueno (a los bots, al host). `kind` sorteado al recoger (cajas misteriosas). Maximo 1 item. `again:1` = resincronizacion: el servidor rechazo un `fire`/`pickup` y devuelve el item que el jugador sigue teniendo.
+- `boxTaken{box, slot}` a todos; `boxBack{box}` a los 6 s.
 - bazooka: `missile{from, target|null, t0, eta, serverNow}` (target = pato con menor `p` mayor que el del tirador, jugador o bot; null = se pierde). Al impactar (`eta` s) llega `stun` o `miss{from,target}` (si el objetivo esta en el aire, inmune o ya aturdido).
 - megafono: `shout{from,p,x,targets:[slot x3],serverNow}` inmediato: los 3 patos mas cercanos en distancia (p,x), delante o detras, jugadores y bots (excluye al que grita; los del aire/inmunes cuentan entre los 3 pero no se ven afectados). Luego un `stun` por cada afectado.
 - `stun{slot,id,until,serverNow}`: aturdido 2 s (reloj de servidor). Durante el stun el servidor no deja avanzar `p` (deriva <=0.5 u/s, `vp` <=1). Inmunidad de 1 s tras el stun.
@@ -95,3 +95,22 @@ S->C:
 - S->C `cangriState{usesLeft,cooldownUntil,serverNow}` al autor al iniciar la carrera y tras cada uso.
 - S->C `cangri{from:<slot>,id,serverNow,flashMs:1500,usesLeft,cooldownUntil}` a todos: el cliente muestra la foto `flashMs` ms y sacude la camara. Ademas `stun` de `CANGRI_STUN_S`=1 s a todos los demas patos (jugadores y bots; no al autor), con la inmunidad post-stun, de aire y de gigante.
 - `welcome.consts`: `CANGRI_PER_RACE=2, CANGRI_COOLDOWN_S=15, CANGRI_STUN_S=1`. Estaticos: `/cangri.webp` (`image/webp`) y `GET /sfx/cangri.mp3` (`audio/mpeg`, archivo local no versionado en `sfx/`; 404 si falta; solo ese archivo se sirve de `sfx/`).
+
+## Salto con espacio (hop)
+- C->S `hop{}` al presionar espacio, `land{}` al soltarlo. Solo en `race` iniciada, en carrera, no en el aire (rampa o hop), no aturdido, fuera de cooldown.
+- S->C `hop{slot,id,t0,until,serverNow}` a todos al saltar y al aterrizar (`land` acorta `until` a `max(ahora, t0+HOP_MIN_S)+HOP_FALL_S`).
+- `welcome.consts`: `HOP_S=1.6` (aire maximo planeando), `HOP_MIN_S=0.5`, `HOP_FALL_S=0.3`, `HOP_CD_S=1.5` (desde que aterriza).
+- Sin impulso ni inmunidad a stuns: en el cliente, mientras dura, no aplican obstaculos ni choques entre patos.
+
+## Mod menu (Alt+T, abierto a todos)
+- C->S `mod{speed,god,inf,bomb}` (en cualquier fase, 5/s): `speed` 1..2.5 (tope x speed y envolvente ampliada), `god` (no se aturde ni activa/salpica donas), `inf` (KIRK y CANGRI sin limite de usos ni cooldown; el cliente los lanza con K y C), `bomb` (bomba atomica infinita: C->S `nuke{}` con la tecla B; una cuenta atras a la vez; no gasta la bomba de caja).
+- S->C `modList{ids}` (ids con algun cheat activo) SOLO a quienes tienen algun cheat activo (al apagarlo todo reciben una ultima lista vacia); el cliente pinta esos nombres en rojo con "MODO EPSTEIN". Los demas no reciben nada.
+- Con `mod` la meta vale desde `LENGTH/(MAX_SPEED*2.5)` s.
+
+## Bomba atomica
+- Como mucho 1 por carrera desde las cajas: la N-esima caja recogida (N al azar 3..12; `DUCK_NUKE_N` fuerza N, 0 = nunca; con `DUCK_ITEM` no sale salvo `DUCK_NUKE_N`). No se guarda como item.
+- S->C `nuke{from,id,at,serverNow}` a todos: cuenta atras de `NUKE_DELAY_S=5` s.
+- S->C `nukeBoom{from,leader,a:{slot,p,x},b:{slot,p,x},serverNow}`: `from` intercambia posicion validada con el 1er lugar (`leader`; null si ya iba 1o o el 1o es gigante/invulnerable). El mapa queda arrasado (sin obstaculos, cielo rojo) hasta el fin de la carrera.
+
+## Rebufo
+- Pato justo delante (`DRAFT_DP=9`, `DRAFT_DX=1.8`) -> tope x`DRAFT_BOOST=1.15`. El servidor lo valida con posiciones saneadas (holgura +3/+1.2, gracia 1.5 s); la envolvente solo crece por el tiempo pasado en rebufo.
