@@ -20,3 +20,6 @@ Canción sugerida: **"We Are Charlie Kirk" — SPALEXMA** · [Escúchala en YouT
 ## Archivos
 - `carrera.html` — el juego.
 - `index.html` — prototipo original del pato de hule (incompleto).
+
+## Créditos
+Creado por **skyl1n3.fx** con **Midas** y **Chuvi**.
